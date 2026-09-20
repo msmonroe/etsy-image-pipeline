@@ -49,6 +49,8 @@ pipeline.py                         Main Dropbox -> Replicate -> Dropbox worker
 etsy_api.py                         Mock/real Etsy API client abstraction
 tools/create_etsy_metadata.py       Create Dropbox-native Etsy sidecars
 tools/create_etsy_draft.py          Rehearse or create Etsy draft listings
+listing_images.py                   Pillow listing-image renderer
+tools/generate_listing_images.py    Generate Dropbox Etsy listing images
 metadata/etsy_asset.schema.json     Sidecar metadata schema
 metadata/README.md                  Detailed metadata documentation
 dropbox_test/test_dropbox.py        Dropbox read/write smoke test
@@ -524,3 +526,60 @@ later connect real Etsy credentials
     ->
 create Etsy drafts with human review
 ```
+
+
+## Generate Etsy listing images
+
+Etsy listing images are separate from the transparent PNG files delivered to buyers. The generator creates flattened JPEG previews from an upscaled production PNG and stores them under:
+
+```text
+/Etsy/Listing-Images/<listing_key>/
+```
+
+The current set is:
+
+```text
+01 hero      clean primary product preview
+02 detail    close-up artwork view
+03 specs     pixel dimensions / DPI / transparency / digital-only notice
+04 included  summary of downloadable files
+```
+
+Default configuration:
+
+```text
+DROPBOX_LISTING_IMAGES_FOLDER=/Etsy/Listing-Images
+ETSY_LISTING_IMAGE_WIDTH=2400
+ETSY_LISTING_IMAGE_HEIGHT=2000
+ETSY_LISTING_IMAGE_JPEG_QUALITY=90
+```
+
+The 2400 x 2000 default keeps both dimensions above Etsy's current 2000-pixel recommendation for listing photos. Listing previews are JPEG because transparent PNG listing images are not suitable for Etsy display; buyer download PNGs remain transparent.
+
+Generate listing images for an upscaled asset:
+
+```bash
+python tools/generate_listing_images.py \
+  samurai_cat_halloween_witch_black_master.png
+```
+
+A basename resolves under `DROPBOX_UPSCALED_FOLDER`.
+
+The tool requires the matching production sidecar:
+
+```text
+/Etsy/Upscaled/image.png
+/Etsy/Upscaled/image.etsy.json
+```
+
+It uploads the generated JPEGs to the listing-images folder and updates the sidecar's `listing_images` array with Dropbox paths, rank, and alt text.
+
+Existing listing images are protected. Use `--force` only for a deliberate regeneration:
+
+```bash
+python tools/generate_listing_images.py \
+  samurai_cat_halloween_witch_black_master.png \
+  --force
+```
+
+This stage does not call Etsy and does not publish anything.
