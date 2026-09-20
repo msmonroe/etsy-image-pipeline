@@ -78,6 +78,7 @@
         "required": ["filename"],
         "properties": {
           "filename": {"type": "string"},
+          "dropbox_path": {"type": ["string", "null"]},
           "display_name": {"type": ["string", "null"]}
         },
         "additionalProperties": false
