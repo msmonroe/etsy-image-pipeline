@@ -586,3 +586,37 @@ python tools/generate_listing_images.py \
 ```
 
 This stage does not call Etsy and does not publish anything.
+
+
+## Replicate GPU OOM fallback
+
+The primary model remains:
+
+```text
+nightmareai/real-esrgan
+```
+
+That official model does not expose a tile-size input. If Replicate reports a CUDA/GPU out-of-memory failure, the worker can automatically retry the same source using a tiled Real-ESRGAN model:
+
+```text
+xinntao/realesrgan
+```
+
+Configure:
+
+```text
+REPLICATE_FALLBACK_ON_OOM=true
+REPLICATE_FALLBACK_MODEL=xinntao/realesrgan
+REPLICATE_FALLBACK_TILE=400
+REPLICATE_FALLBACK_VERSION_NAME=General - v3
+```
+
+The fallback is only used for recognized GPU-memory failures. Ordinary API, authentication, validation, and model errors still fail normally rather than silently switching models.
+
+If tile 400 itself runs out of GPU memory, reduce it to:
+
+```text
+REPLICATE_FALLBACK_TILE=200
+```
+
+The fallback keeps the configured `UPSCALE_FACTOR` and the normal dimension/transparency validation still runs afterward.
