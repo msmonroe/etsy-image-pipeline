@@ -8,7 +8,9 @@
     "listing_key",
     "role",
     "ip_review",
-    "etsy"
+    "etsy",
+    "listing_images",
+    "digital_files"
   ],
   "properties": {
     "asset_key": {
@@ -20,7 +22,7 @@
     },
     "listing_key": {
       "type": "string",
-      "description": "Groups one or more assets into a future Etsy listing/bundle."
+      "description": "Groups one or more assets into one future Etsy listing/bundle."
     },
     "role": {
       "type": "string",
@@ -54,9 +56,46 @@
       },
       "additionalProperties": false
     },
+    "listing_images": {
+      "type": "array",
+      "description": "Images shown on the Etsy listing page. Filenames are relative to the sidecar unless absolute.",
+      "items": {
+        "type": "object",
+        "required": ["filename"],
+        "properties": {
+          "filename": {"type": "string"},
+          "rank": {"type": ["integer", "null"], "minimum": 1},
+          "alt_text": {"type": ["string", "null"]}
+        },
+        "additionalProperties": false
+      }
+    },
+    "digital_files": {
+      "type": "array",
+      "description": "Files delivered to the buyer. Filenames are relative to the sidecar unless absolute.",
+      "items": {
+        "type": "object",
+        "required": ["filename"],
+        "properties": {
+          "filename": {"type": "string"},
+          "display_name": {"type": ["string", "null"]}
+        },
+        "additionalProperties": false
+      }
+    },
     "etsy": {
       "type": "object",
-      "required": ["title", "description", "price", "quantity", "who_made", "when_made", "taxonomy_id", "type", "tags"],
+      "required": [
+        "title",
+        "description",
+        "price",
+        "quantity",
+        "who_made",
+        "when_made",
+        "taxonomy_id",
+        "type",
+        "tags"
+      ],
       "properties": {
         "title": {"type": "string"},
         "description": {"type": "string"},
