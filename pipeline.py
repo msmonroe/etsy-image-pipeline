@@ -159,6 +159,25 @@ def copy_to_review(dbx: dropbox.Dropbox, src_path: str, review_folder: str) -> N
     LOG.warning("Copied failed source to %s", dst)
 
 
+def copy_sidecar_to_output(
+    dbx: dropbox.Dropbox,
+    src_image_path: str,
+    output_folder: str,
+    overwrite: bool,
+) -> None:
+    src_image = PurePosixPath(src_image_path)
+    src_sidecar = str(src_image.with_name(f"{src_image.stem}.etsy.json"))
+
+    if not dropbox_file_exists(dbx, src_sidecar):
+        LOG.info("No Etsy sidecar found for %s", src_image.name)
+        return
+
+    dst_sidecar = f"{output_folder.rstrip('/')}/{PurePosixPath(src_sidecar).name}"
+    sidecar_bytes = download_dropbox_file(dbx, src_sidecar)
+    upload_dropbox_file(dbx, dst_sidecar, sidecar_bytes, overwrite=overwrite)
+    LOG.info("Copied Etsy sidecar -> %s", dst_sidecar)
+
+
 def source_alpha(source_bytes: bytes) -> tuple[Optional[Image.Image], bool]:
     with Image.open(io.BytesIO(source_bytes)) as img:
         rgba = img.convert("RGBA")
@@ -348,6 +367,12 @@ def process_file(
     width, height, has_alpha = validate_output(source, final_png, cfg)
 
     upload_dropbox_file(dbx, dst_path, final_png, overwrite=cfg.overwrite_output)
+    copy_sidecar_to_output(
+        dbx,
+        src_path,
+        cfg.upscaled_folder,
+        overwrite=cfg.overwrite_output,
+    )
     LOG.info(
         "DONE %s -> %s (%sx%s, transparency=%s)",
         entry.name,
