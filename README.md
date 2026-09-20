@@ -1,63 +1,89 @@
 # Etsy Image Pipeline
 
-A small Ubuntu-friendly worker that scans a Dropbox folder for approved PNG artwork, upscales it through Replicate, validates the result, and uploads the finished PNG back to Dropbox.
+Ubuntu-friendly tooling for an original, IP-clean Etsy digital-art workflow built around Dropbox, Replicate, PNG transparency preservation, metadata sidecars, and a mock-first Etsy API layer.
 
-## Workflow
+The project is intentionally conservative:
+
+- source art is read from Dropbox,
+- approved PNGs are upscaled through Replicate,
+- transparency is restored and validated,
+- finished PNGs are written at 300 DPI metadata,
+- failed source files are routed to `/Etsy/Needs-Review`,
+- Etsy metadata travels beside each image as a matching `.etsy.json` sidecar,
+- Etsy integration runs in mock mode by default,
+- nothing is published to Etsy automatically.
+
+## Current workflow
 
 ```text
 Dropbox /Etsy/Approved
+        |
+        +--> image.png
+        +--> image.etsy.json
         |
         v
 Python worker
         |
         +--> download source PNG
-        +--> send to Replicate upscaler
-        +--> restore/preserve source alpha channel
+        +--> send image to Replicate Real-ESRGAN
+        +--> restore/preserve original alpha channel
+        +--> write PNG with 300 DPI metadata
         +--> validate dimensions + transparency
         |
-        +--> success: Dropbox /Etsy/Upscaled
+        +--> success
+        |      |
+        |      +--> /Etsy/Upscaled/image.png
+        |      +--> /Etsy/Upscaled/image.etsy.json
         |
-        +--> failure: copy source to Dropbox /Etsy/Needs-Review
+        +--> failure
+               |
+               +--> /Etsy/Needs-Review/image.png
 ```
 
-The worker is intentionally conservative. It does **not** publish to Etsy. It only prepares production-ready image files.
+The sidecar is optional for image processing. If a matching `.etsy.json` exists, the worker copies it forward with the successful image.
 
-## Replicate model
-
-The current smoke-test configuration uses the official Replicate model:
+## Repository layout
 
 ```text
-nightmareai/real-esrgan
+pipeline.py                         Main Dropbox -> Replicate -> Dropbox worker
+etsy_api.py                         Mock/real Etsy API client abstraction
+tools/create_etsy_metadata.py       Create Dropbox-native Etsy sidecars
+tools/create_etsy_draft.py          Rehearse or create Etsy draft listings
+metadata/etsy_asset.schema.json     Sidecar metadata schema
+metadata/README.md                  Detailed metadata documentation
+dropbox_test/test_dropbox.py        Dropbox read/write smoke test
+systemd/etsy-image-pipeline.service systemd oneshot service
+systemd/etsy-image-pipeline.timer   recurring timer
+.env.example                        configuration template
 ```
 
-Its API accepts the fields used by this worker:
+## Branch
 
-```json
-{
-  "image": "...",
-  "scale": 3,
-  "face_enhance": false
-}
+Current development work is on:
+
+```text
+replicate-smoke-test
 ```
 
-At 3x, a 1536 x 1536 source should produce approximately 4608 x 4608 output. The worker validates both a minimum size and the expected scale so an accidental 2x or 4x model response does not silently pass.
-
-The model slug is configured with `REPLICATE_MODEL`. `REPLICATE_MODEL_VERSION` is optional; leave it blank to call Replicate's model endpoint, or set an exact version ID if you later want to pin a version.
-
-## 1. Clone
+Clone and switch to it:
 
 ```bash
 git clone https://github.com/msmonroe/etsy-image-pipeline.git
 cd etsy-image-pipeline
-```
-
-For the current smoke-test branch:
-
-```bash
 git switch replicate-smoke-test
 ```
 
-## 2. Create a virtual environment
+If the repository is already cloned:
+
+```bash
+git fetch
+git switch replicate-smoke-test
+git pull
+```
+
+## Python environment
+
+Create and activate a virtual environment:
 
 ```bash
 python3 -m venv .venv
@@ -65,7 +91,11 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## 3. Configure secrets
+A successful activation normally changes the shell prompt to begin with `(.venv)`.
+
+## Configuration
+
+Create the local environment file:
 
 ```bash
 cp .env.example .env
@@ -74,77 +104,366 @@ nano .env
 
 Never commit `.env`.
 
-You can authenticate to Dropbox with either:
+### Dropbox
 
-- a development access token, or
-- a refresh token plus Dropbox app key and secret
-
-For unattended use, refresh-token authentication is preferable.
-
-For Replicate, add your API token:
+For a quick test, an access token is sufficient:
 
 ```text
-REPLICATE_API_TOKEN=...
+DROPBOX_ACCESS_TOKEN=
 ```
 
-The default model settings are already in `.env.example`:
+For unattended operation, refresh-token authentication is preferred:
 
 ```text
+DROPBOX_REFRESH_TOKEN=
+DROPBOX_APP_KEY=
+DROPBOX_APP_SECRET=
+```
+
+Default folders:
+
+```text
+DROPBOX_APPROVED_FOLDER=/Etsy/Approved
+DROPBOX_UPSCALED_FOLDER=/Etsy/Upscaled
+DROPBOX_NEEDS_REVIEW_FOLDER=/Etsy/Needs-Review
+```
+
+The Dropbox app must have access to the real `/Etsy` tree. For this workflow, a Dropbox app created with **Full Dropbox** access is required rather than App Folder access.
+
+The app needs file metadata/content read and write scopes sufficient to list, download, upload, copy, and inspect files.
+
+## Dropbox smoke test
+
+Before involving Replicate, verify Dropbox independently:
+
+```bash
+python dropbox_test/test_dropbox.py
+```
+
+A successful run ends with:
+
+```text
+Dropbox application test PASSED.
+Read and write access required by the image pipeline are working.
+```
+
+The test uses:
+
+```text
+/Etsy/Test/dropbox_app_test.txt
+```
+
+and does not modify approved artwork.
+
+## Replicate upscaler
+
+The current model is:
+
+```text
+nightmareai/real-esrgan
+```
+
+Configure:
+
+```text
+REPLICATE_API_TOKEN=
 REPLICATE_MODEL=nightmareai/real-esrgan
-UPSCALE_FACTOR=3
+REPLICATE_MODEL_VERSION=
+UPSCALE_FACTOR=4
 FACE_ENHANCE=false
 ```
 
-## 4. Smoke-test exactly one approved image
+`REPLICATE_MODEL_VERSION` may be left blank to use the model endpoint/current version.
 
-Do **not** enable the timer yet.
+### Output sizing
 
-Use the exact filename selector so the test cannot spill into other approved assets:
+The worker validates both:
 
-```bash
-python pipeline.py --once --file samurai_cat_halloween_witch_black_master.png
+- a minimum output size, and
+- the expected output dimensions based on source dimensions x `UPSCALE_FACTOR`.
+
+For example:
+
+```text
+1254 x 1254 source at 4x -> approximately 5016 x 5016
+1536 x 1536 source at 3x -> approximately 4608 x 4608
 ```
 
-Expected success path:
+Current minimums are controlled by:
+
+```text
+MIN_OUTPUT_WIDTH=4500
+MIN_OUTPUT_HEIGHT=4500
+DIMENSION_TOLERANCE_PX=8
+```
+
+Choose the upscale factor based on the actual source size. A 1254 px source needs 4x to clear a 4500 px minimum.
+
+## Transparency and PNG output
+
+Many RGB-oriented upscalers can lose or damage PNG transparency.
+
+The worker therefore:
+
+1. reads and preserves the source alpha channel,
+2. sends the image through the upscaler,
+3. resizes the original alpha channel to match the returned image,
+4. reattaches it,
+5. validates that transparency still exists when the source used transparency.
+
+Final PNGs are written with:
+
+```text
+300 DPI metadata
+RGBA transparency when applicable
+PNG format
+```
+
+DPI is metadata only. Pixel dimensions determine the actual image resolution.
+
+## Single-image smoke test
+
+Do not enable unattended processing until a single-image test passes.
+
+Example:
+
+```bash
+python pipeline.py --once \
+  --file samurai_cat_halloween_witch_black_master.png
+```
+
+The exact filename selector prevents the smoke test from processing other approved assets.
+
+A successful run should end with something similar to:
+
+```text
+Run complete. attempted=1 processed=1 skipped=0 failures=0
+```
+
+If the destination PNG already exists and `OVERWRITE_OUTPUT=false`, the file is skipped.
+
+For a deliberate retest, temporarily set:
+
+```text
+OVERWRITE_OUTPUT=true
+```
+
+or remove the existing output first.
+
+## Failure handling
+
+If an image fails processing, the source is copied to:
+
+```text
+/Etsy/Needs-Review/
+```
+
+If a copy with the same filename already exists there, the worker logs that condition and does not create another duplicate.
+
+A failed file remains in `/Etsy/Approved`; the current behavior is a copy-to-review workflow, not a move.
+
+## Etsy metadata sidecars
+
+Each image can have a matching JSON sidecar with the exact same filename stem:
 
 ```text
 /Etsy/Approved/samurai_cat_halloween_witch_black_master.png
-        ->
-/Etsy/Upscaled/samurai_cat_halloween_witch_black_master.png
+/Etsy/Approved/samurai_cat_halloween_witch_black_master.etsy.json
 ```
 
-If processing fails, the source is copied to:
+The sidecar contains two stable identifiers:
 
-```text
-/Etsy/Needs-Review/samurai_cat_halloween_witch_black_master.png
+- `asset_key`: identifies the specific image,
+- `listing_key`: groups one or more images into a future Etsy listing/bundle.
+
+Example:
+
+```json
+{
+  "asset_key": "samurai_cat_halloween_witch_black_master",
+  "source_filename": "samurai_cat_halloween_witch_black_master.png",
+  "listing_key": "samurai_cat_halloween"
+}
 ```
 
-The process exits non-zero on a processing failure.
+### Create a sidecar directly in Dropbox
 
-You can also limit a general scan by attempted file count:
+Using only a basename:
 
 ```bash
-python pipeline.py --once --limit 1
+python tools/create_etsy_metadata.py \
+  samurai_cat_halloween_witch_black_master.png \
+  --listing-key samurai_cat_halloween
 ```
 
-Important: `--limit` counts attempted files, not only successful files.
+A basename resolves under `DROPBOX_APPROVED_FOLDER`.
 
-## 5. Inspect the result before automation
+You can also use the full Dropbox path:
 
-Check the log output for:
+```bash
+python tools/create_etsy_metadata.py \
+  /Etsy/Approved/samurai_cat_halloween_witch_black_master.png \
+  --listing-key samurai_cat_halloween
+```
 
-- source dimensions and mode,
-- output dimensions near 4608 x 4608 for a 1536 x 1536 source,
-- `transparency=True` when the source contains transparent pixels,
-- a final `processed=1 failures=0` summary.
+The tool refuses to overwrite an existing sidecar unless `--force` is supplied.
 
-Also visually inspect edges against both light and dark backgrounds. The pipeline restores the source alpha channel after upscaling, but edge quality still deserves a human check before unattended operation.
+### IP review gate
 
-## 6. Install as a systemd timer only after the smoke test passes
+Sidecars begin with:
 
-Edit `systemd/etsy-image-pipeline.service` and replace `YOUR_LINUX_USER` and the project path if needed.
+```json
+"ip_review": {
+  "status": "pending",
+  "original_art_only": true,
+  "notes": ""
+}
+```
 
-Then:
+The Etsy draft tool refuses to proceed unless:
+
+```text
+ip_review.status == approved
+original_art_only == true
+```
+
+This project is intended for original, no-brand, no-character, low-copyright-risk artwork only.
+
+## Etsy listing metadata
+
+The sidecar schema includes fields for:
+
+```text
+title
+description
+price
+quantity
+who_made
+when_made
+taxonomy_id
+type
+tags
+materials
+sku
+listing_id
+state
+```
+
+It also tracks two different asset groups:
+
+### Listing images
+
+These are images shown on the Etsy product page:
+
+```json
+"listing_images": [
+  {
+    "filename": "samurai_cat_halloween_preview.jpg",
+    "rank": 1,
+    "alt_text": "Halloween samurai cat digital art preview"
+  }
+]
+```
+
+### Digital files
+
+These are files delivered to the buyer:
+
+```json
+"digital_files": [
+  {
+    "filename": "samurai_cat_halloween_witch_black_master.png",
+    "display_name": "Samurai Cat Witch PNG"
+  }
+]
+```
+
+The metadata generator automatically seeds the source PNG into `digital_files`.
+
+## Mock Etsy API
+
+The Etsy API layer is implemented now, but mock mode is the default.
+
+Configure:
+
+```text
+ETSY_MODE=mock
+ETSY_API_KEYSTRING=
+ETSY_SHARED_SECRET=
+ETSY_ACCESS_TOKEN=
+ETSY_SHOP_ID=
+ETSY_OUTBOX_DIR=.etsy_mock_outbox
+```
+
+Mock output is ignored by Git.
+
+### Create a mock draft
+
+Once the required metadata is filled in and the IP review is approved:
+
+```bash
+python tools/create_etsy_draft.py \
+  path/to/actual-item.etsy.json
+```
+
+The path above must point to a real local sidecar file. It is an example, not a literal filename.
+
+To also rehearse listing-image and digital-file upload operations:
+
+```bash
+python tools/create_etsy_draft.py \
+  path/to/actual-item.etsy.json \
+  --include-assets
+```
+
+Mock events are written to:
+
+```text
+.etsy_mock_outbox/
+```
+
+Nothing is sent to Etsy while:
+
+```text
+ETSY_MODE=mock
+```
+
+## Real Etsy API safety latch
+
+Later, after Etsy credentials are configured, changing:
+
+```text
+ETSY_MODE=real
+```
+
+is still not sufficient to send requests.
+
+The command also requires:
+
+```bash
+--allow-real-api
+```
+
+This gives the Etsy integration two independent safety gates:
+
+1. environment configuration must explicitly select real mode,
+2. the command must explicitly authorize a real API operation.
+
+The current design creates drafts. It does not automatically publish listings.
+
+## systemd unattended operation
+
+Only enable the timer after Dropbox, Replicate, transparency, dimensions, and metadata behavior have all been tested.
+
+Edit:
+
+```text
+systemd/etsy-image-pipeline.service
+```
+
+and replace `YOUR_LINUX_USER` and the repository path as needed.
+
+Install:
 
 ```bash
 sudo cp systemd/etsy-image-pipeline.service /etc/systemd/system/
@@ -153,52 +472,55 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now etsy-image-pipeline.timer
 ```
 
-Check it:
+Check status:
 
 ```bash
 systemctl list-timers | grep etsy-image
 journalctl -u etsy-image-pipeline.service -n 100 --no-pager
 ```
 
-To disable it:
+Disable:
 
 ```bash
 sudo systemctl disable --now etsy-image-pipeline.timer
 ```
 
-## Dropbox folders
+## Safety summary
 
-Defaults:
-
-- Source: `/Etsy/Approved`
-- Output: `/Etsy/Upscaled`
-- Failed source copies: `/Etsy/Needs-Review`
-
-The worker skips a source image when an output with the same basename already exists unless `OVERWRITE_OUTPUT=true`.
-
-## Transparency handling
-
-Many image upscalers are optimized for RGB images and can lose or damage PNG transparency.
-
-This worker therefore:
-
-1. records the source alpha channel,
-2. runs the image through the upscaler,
-3. resizes the original alpha channel to the final output dimensions,
-4. reattaches it to the upscaled RGB result,
-5. verifies that transparency still exists when the source used transparency.
-
-That is deliberately boring. Boring pipelines are good pipelines.
-
-## Safety
-
-- Secrets are read only from environment variables.
 - `.env` is ignored by Git.
-- Existing Dropbox outputs are not overwritten by default.
-- Failed files are copied to `Needs-Review` when possible.
-- A smoke test can target one exact filename.
-- Etsy publishing is intentionally outside this version.
+- Secrets remain local.
+- Existing output files are not overwritten by default.
+- One-image smoke tests can target an exact basename.
+- Failed images are copied to `Needs-Review`.
+- PNG transparency is preserved and validated.
+- Final PNGs are written with 300 DPI metadata.
+- Etsy metadata follows the image through the Dropbox pipeline.
+- Etsy integration defaults to mock mode.
+- Real Etsy requests require an additional explicit command-line switch.
+- No automatic Etsy publishing is enabled.
 
-## Next phase
+## Current development path
 
-Once this worker is stable, the next layer can create Etsy draft listings from structured metadata while keeping a human review step before publication.
+The intended progression is:
+
+```text
+Dropbox app test
+    ->
+single-image Replicate test
+    ->
+validate transparency / dimensions / DPI
+    ->
+create Dropbox-native .etsy.json
+    ->
+populate listing metadata
+    ->
+mock Etsy draft
+    ->
+mock asset uploads
+    ->
+enable unattended image processing
+    ->
+later connect real Etsy credentials
+    ->
+create Etsy drafts with human review
+```
