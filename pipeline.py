@@ -265,7 +265,12 @@ def restore_alpha(source_bytes: bytes, upscaled_bytes: bytes) -> bytes:
             final = rgb.convert("RGBA")
 
         output = io.BytesIO()
-        final.save(\n            output,\n            format="PNG",\n            optimize=True,\n            dpi=(300, 300),\n        )
+        final.save(
+            output,
+            format="PNG",
+            optimize=True,
+            dpi=(300, 300),
+        )
         return output.getvalue()
 
 
