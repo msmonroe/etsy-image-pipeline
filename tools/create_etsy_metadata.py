@@ -27,6 +27,13 @@ def build_metadata(image: Path, listing_key: str | None) -> dict:
             "transparent": True,
             "format": "PNG"
         },
+        "listing_images": [],
+        "digital_files": [
+            {
+                "filename": image.name,
+                "display_name": image.name
+            }
+        ],
         "etsy": {
             "title": "",
             "description": "",
