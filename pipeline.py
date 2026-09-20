@@ -2,11 +2,11 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import io
 import logging
 import os
 import sys
-import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import PurePosixPath
@@ -32,12 +32,14 @@ class Config:
     face_enhance: bool
     min_output_width: int
     min_output_height: int
+    dimension_tolerance_px: int
     request_timeout: int
     poll_interval: int
     max_poll_seconds: int
     copy_failures_to_review: bool
     overwrite_output: bool
     replicate_api_token: str
+    replicate_model: str
     replicate_model_version: str
 
 
@@ -50,12 +52,13 @@ def env_bool(name: str, default: bool = False) -> bool:
 
 def load_config() -> Config:
     token = os.getenv("REPLICATE_API_TOKEN", "").strip()
+    model = os.getenv("REPLICATE_MODEL", "nightmareai/real-esrgan").strip()
     version = os.getenv("REPLICATE_MODEL_VERSION", "").strip()
 
     if not token:
         raise RuntimeError("REPLICATE_API_TOKEN is required")
-    if not version:
-        raise RuntimeError("REPLICATE_MODEL_VERSION is required")
+    if "/" not in model:
+        raise RuntimeError("REPLICATE_MODEL must look like owner/model")
 
     factor = int(os.getenv("UPSCALE_FACTOR", "3"))
     if factor < 2 or factor > 8:
@@ -67,14 +70,16 @@ def load_config() -> Config:
         needs_review_folder=os.getenv("DROPBOX_NEEDS_REVIEW_FOLDER", "/Etsy/Needs-Review"),
         upscale_factor=factor,
         face_enhance=env_bool("FACE_ENHANCE", False),
-        min_output_width=int(os.getenv("MIN_OUTPUT_WIDTH", "4000")),
-        min_output_height=int(os.getenv("MIN_OUTPUT_HEIGHT", "4000")),
+        min_output_width=int(os.getenv("MIN_OUTPUT_WIDTH", "4500")),
+        min_output_height=int(os.getenv("MIN_OUTPUT_HEIGHT", "4500")),
+        dimension_tolerance_px=int(os.getenv("DIMENSION_TOLERANCE_PX", "8")),
         request_timeout=int(os.getenv("REQUEST_TIMEOUT_SECONDS", "300")),
         poll_interval=int(os.getenv("POLL_INTERVAL_SECONDS", "2")),
         max_poll_seconds=int(os.getenv("MAX_POLL_SECONDS", "900")),
         copy_failures_to_review=env_bool("COPY_FAILURES_TO_REVIEW", True),
         overwrite_output=env_bool("OVERWRITE_OUTPUT", False),
         replicate_api_token=token,
+        replicate_model=model,
         replicate_model_version=version,
     )
 
@@ -158,32 +163,37 @@ def source_alpha(source_bytes: bytes) -> tuple[Optional[Image.Image], bool]:
     with Image.open(io.BytesIO(source_bytes)) as img:
         rgba = img.convert("RGBA")
         alpha = rgba.getchannel("A")
-        lo, hi = alpha.getextrema()
+        lo, _ = alpha.getextrema()
         has_transparency = lo < 255
         return alpha.copy(), has_transparency
+
+
+def replicate_create_url(cfg: Config) -> tuple[str, dict]:
+    if cfg.replicate_model_version:
+        return (
+            "https://api.replicate.com/v1/predictions",
+            {"version": cfg.replicate_model_version},
+        )
+
+    owner, model = cfg.replicate_model.split("/", 1)
+    return (
+        f"https://api.replicate.com/v1/models/{owner}/{model}/predictions",
+        {},
+    )
 
 
 def run_replicate_upscale(source_bytes: bytes, cfg: Config) -> bytes:
     headers = {
         "Authorization": f"Bearer {cfg.replicate_api_token}",
         "Accept": "application/json",
+        "Content-Type": "application/json",
     }
-
-    create_url = "https://api.replicate.com/v1/predictions"
-
-    files = {
-        "image": ("input.png", source_bytes, "image/png"),
-    }
-
-    # Replicate prediction endpoints generally accept JSON/base64 or hosted URLs.
-    # To avoid committing provider-specific hosting logic, this worker uses a
-    # data URI for the source image.
-    import base64
 
     data_uri = "data:image/png;base64," + base64.b64encode(source_bytes).decode("ascii")
+    create_url, model_selector = replicate_create_url(cfg)
 
     payload = {
-        "version": cfg.replicate_model_version,
+        **model_selector,
         "input": {
             "image": data_uri,
             "scale": cfg.upscale_factor,
@@ -193,12 +203,15 @@ def run_replicate_upscale(source_bytes: bytes, cfg: Config) -> bytes:
 
     response = requests.post(
         create_url,
-        headers={**headers, "Content-Type": "application/json"},
+        headers=headers,
         json=payload,
         timeout=cfg.request_timeout,
     )
     response.raise_for_status()
     prediction = response.json()
+
+    if prediction.get("status") == "succeeded":
+        return download_replicate_output(prediction, cfg)
 
     get_url = prediction.get("urls", {}).get("get")
     if not get_url:
@@ -215,15 +228,7 @@ def run_replicate_upscale(source_bytes: bytes, cfg: Config) -> bytes:
         status = prediction.get("status")
 
         if status == "succeeded":
-            output = prediction.get("output")
-            if isinstance(output, list):
-                output = output[0] if output else None
-            if not isinstance(output, str) or not output.startswith("http"):
-                raise RuntimeError(f"Unexpected Replicate output: {prediction.get('output')!r}")
-
-            image_response = requests.get(output, timeout=cfg.request_timeout)
-            image_response.raise_for_status()
-            return image_response.content
+            return download_replicate_output(prediction, cfg)
 
         if status in {"failed", "canceled"}:
             raise RuntimeError(
@@ -231,6 +236,19 @@ def run_replicate_upscale(source_bytes: bytes, cfg: Config) -> bytes:
             )
 
         time.sleep(cfg.poll_interval)
+
+
+def download_replicate_output(prediction: dict, cfg: Config) -> bytes:
+    output = prediction.get("output")
+    if isinstance(output, list):
+        output = output[0] if output else None
+
+    if not isinstance(output, str) or not output.startswith("http"):
+        raise RuntimeError(f"Unexpected Replicate output: {prediction.get('output')!r}")
+
+    image_response = requests.get(output, timeout=cfg.request_timeout)
+    image_response.raise_for_status()
+    return image_response.content
 
 
 def restore_alpha(source_bytes: bytes, upscaled_bytes: bytes) -> bytes:
@@ -258,6 +276,9 @@ def validate_output(
 ) -> tuple[int, int, bool]:
     _, source_has_transparency = source_alpha(source_bytes)
 
+    with Image.open(io.BytesIO(source_bytes)) as source_img:
+        source_width, source_height = source_img.size
+
     with Image.open(io.BytesIO(output_bytes)) as img:
         img.verify()
 
@@ -272,6 +293,17 @@ def validate_output(
         raise ValueError(
             f"Upscaled image too small: {width}x{height}; "
             f"minimum is {cfg.min_output_width}x{cfg.min_output_height}"
+        )
+
+    expected_width = source_width * cfg.upscale_factor
+    expected_height = source_height * cfg.upscale_factor
+    if (
+        abs(width - expected_width) > cfg.dimension_tolerance_px
+        or abs(height - expected_height) > cfg.dimension_tolerance_px
+    ):
+        raise ValueError(
+            f"Unexpected output dimensions: {width}x{height}; expected about "
+            f"{expected_width}x{expected_height} (+/- {cfg.dimension_tolerance_px}px)"
         )
 
     if source_has_transparency and not output_has_transparency:
@@ -299,7 +331,12 @@ def process_file(
     source = download_dropbox_file(dbx, src_path)
 
     with Image.open(io.BytesIO(source)) as src_img:
-        LOG.info("Source dimensions: %sx%s mode=%s", *src_img.size, src_img.mode)
+        LOG.info(
+            "Source dimensions: %sx%s mode=%s format=%s",
+            *src_img.size,
+            src_img.mode,
+            src_img.format,
+        )
 
     upscaled_raw = run_replicate_upscale(source, cfg)
     final_png = restore_alpha(source, upscaled_raw)
@@ -317,7 +354,7 @@ def process_file(
     return True
 
 
-def run_once(limit: Optional[int] = None) -> int:
+def run_once(limit: Optional[int] = None, only_file: Optional[str] = None) -> int:
     cfg = load_config()
     dbx = make_dropbox_client()
 
@@ -326,17 +363,28 @@ def run_once(limit: Optional[int] = None) -> int:
     if cfg.copy_failures_to_review:
         ensure_dropbox_folder(dbx, cfg.needs_review_folder)
 
+    attempted = 0
     processed = 0
+    skipped = 0
     failures = 0
+    matched_file = False
 
     for entry in list_pngs(dbx, cfg.approved_folder):
-        if limit is not None and processed >= limit:
+        if only_file and entry.name != only_file:
+            continue
+
+        matched_file = True
+        if limit is not None and attempted >= limit:
             break
+
+        attempted += 1
 
         try:
             changed = process_file(dbx, entry, cfg)
             if changed:
                 processed += 1
+            else:
+                skipped += 1
         except Exception:
             failures += 1
             LOG.exception("FAILED %s", entry.name)
@@ -346,7 +394,17 @@ def run_once(limit: Optional[int] = None) -> int:
                 except Exception:
                     LOG.exception("Could not copy %s to Needs-Review", entry.name)
 
-    LOG.info("Run complete. processed=%s failures=%s", processed, failures)
+    if only_file and not matched_file:
+        LOG.error("Requested source file was not found in %s: %s", cfg.approved_folder, only_file)
+        return 1
+
+    LOG.info(
+        "Run complete. attempted=%s processed=%s skipped=%s failures=%s",
+        attempted,
+        processed,
+        skipped,
+        failures,
+    )
     return 1 if failures else 0
 
 
@@ -361,7 +419,13 @@ def parse_args() -> argparse.Namespace:
         "--limit",
         type=int,
         default=None,
-        help="Maximum number of newly processed files for this run.",
+        help="Maximum number of files attempted during this run.",
+    )
+    parser.add_argument(
+        "--file",
+        dest="only_file",
+        default=None,
+        help="Process only this exact PNG basename from the Approved folder.",
     )
     return parser.parse_args()
 
@@ -378,7 +442,7 @@ def main() -> int:
         LOG.info("No daemon loop is implemented by design; running one pass.")
 
     try:
-        return run_once(limit=args.limit)
+        return run_once(limit=args.limit, only_file=args.only_file)
     except KeyboardInterrupt:
         LOG.warning("Interrupted")
         return 130
