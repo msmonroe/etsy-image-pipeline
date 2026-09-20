@@ -49,6 +49,10 @@ class Config:
     replicate_api_token: str
     replicate_model: str
     replicate_model_version: str
+    replicate_fallback_on_oom: bool
+    replicate_fallback_model: str
+    replicate_fallback_tile: int
+    replicate_fallback_version_name: str
 
 
 def env_bool(name: str, default: bool = False) -> bool:
@@ -94,6 +98,14 @@ def load_config() -> Config:
         replicate_api_token=token,
         replicate_model=model,
         replicate_model_version=version,
+        replicate_fallback_on_oom=env_bool("REPLICATE_FALLBACK_ON_OOM", True),
+        replicate_fallback_model=os.getenv(
+            "REPLICATE_FALLBACK_MODEL", "xinntao/realesrgan"
+        ).strip(),
+        replicate_fallback_tile=int(os.getenv("REPLICATE_FALLBACK_TILE", "400")),
+        replicate_fallback_version_name=os.getenv(
+            "REPLICATE_FALLBACK_VERSION_NAME", "General - v3"
+        ).strip(),
     )
 
 
@@ -288,38 +300,31 @@ def source_alpha(source_bytes: bytes) -> tuple[Optional[Image.Image], bool]:
         return alpha.copy(), has_transparency
 
 
-def replicate_create_url(cfg: Config) -> tuple[str, dict]:
-    if cfg.replicate_model_version:
-        return (
-            "https://api.replicate.com/v1/predictions",
-            {"version": cfg.replicate_model_version},
-        )
-
-    owner, model = cfg.replicate_model.split("/", 1)
-    return (
-        f"https://api.replicate.com/v1/models/{owner}/{model}/predictions",
-        {},
-    )
+def replicate_model_url(model: str) -> str:
+    if "/" not in model:
+        raise RuntimeError("Replicate model must look like owner/model")
+    owner, name = model.split("/", 1)
+    return f"https://api.replicate.com/v1/models/{owner}/{name}/predictions"
 
 
-def run_replicate_upscale(source_bytes: bytes, cfg: Config) -> bytes:
+def run_replicate_prediction(
+    model: str,
+    input_payload: dict,
+    cfg: Config,
+    version_id: str = "",
+) -> bytes:
     headers = {
         "Authorization": f"Bearer {cfg.replicate_api_token}",
         "Accept": "application/json",
         "Content-Type": "application/json",
     }
 
-    data_uri = "data:image/png;base64," + base64.b64encode(source_bytes).decode("ascii")
-    create_url, model_selector = replicate_create_url(cfg)
-
-    payload = {
-        **model_selector,
-        "input": {
-            "image": data_uri,
-            "scale": cfg.upscale_factor,
-            "face_enhance": cfg.face_enhance,
-        },
-    }
+    if version_id:
+        create_url = "https://api.replicate.com/v1/predictions"
+        payload = {"version": version_id, "input": input_payload}
+    else:
+        create_url = replicate_model_url(model)
+        payload = {"input": input_payload}
 
     response = requests.post(
         create_url,
@@ -327,23 +332,38 @@ def run_replicate_upscale(source_bytes: bytes, cfg: Config) -> bytes:
         json=payload,
         timeout=cfg.request_timeout,
     )
-    response.raise_for_status()
-    prediction = response.json()
+    if not response.ok:
+        raise RuntimeError(
+            f"Replicate create request failed HTTP {response.status_code}: "
+            f"{response.text[:2000]}"
+        )
 
+    prediction = response.json()
     if prediction.get("status") == "succeeded":
         return download_replicate_output(prediction, cfg)
 
     get_url = prediction.get("urls", {}).get("get")
     if not get_url:
-        raise RuntimeError(f"Replicate response did not include polling URL: {prediction}")
+        raise RuntimeError(
+            f"Replicate response did not include polling URL: {prediction}"
+        )
 
     deadline = time.monotonic() + cfg.max_poll_seconds
     while True:
         if time.monotonic() > deadline:
             raise TimeoutError("Replicate prediction timed out")
 
-        poll = requests.get(get_url, headers=headers, timeout=cfg.request_timeout)
-        poll.raise_for_status()
+        poll = requests.get(
+            get_url,
+            headers=headers,
+            timeout=cfg.request_timeout,
+        )
+        if not poll.ok:
+            raise RuntimeError(
+                f"Replicate poll failed HTTP {poll.status_code}: "
+                f"{poll.text[:2000]}"
+            )
+
         prediction = poll.json()
         status = prediction.get("status")
 
@@ -352,11 +372,64 @@ def run_replicate_upscale(source_bytes: bytes, cfg: Config) -> bytes:
 
         if status in {"failed", "canceled"}:
             raise RuntimeError(
-                f"Replicate prediction {status}: {prediction.get('error') or prediction}"
+                f"Replicate prediction {status}: "
+                f"{prediction.get('error') or prediction}"
             )
 
         time.sleep(cfg.poll_interval)
 
+
+def is_cuda_oom(error: Exception) -> bool:
+    message = str(error).lower()
+    return (
+        "cuda out of memory" in message
+        or "out of gpu memory" in message
+        or "out-of-gpu-memory" in message
+    )
+
+
+def run_replicate_upscale(source_bytes: bytes, cfg: Config) -> bytes:
+    data_uri = (
+        "data:image/png;base64,"
+        + base64.b64encode(source_bytes).decode("ascii")
+    )
+
+    primary_input = {
+        "image": data_uri,
+        "scale": cfg.upscale_factor,
+        "face_enhance": cfg.face_enhance,
+    }
+
+    try:
+        return run_replicate_prediction(
+            cfg.replicate_model,
+            primary_input,
+            cfg,
+            version_id=cfg.replicate_model_version,
+        )
+    except Exception as exc:
+        if not cfg.replicate_fallback_on_oom or not is_cuda_oom(exc):
+            raise
+
+        LOG.warning(
+            "Primary Replicate model ran out of GPU memory; "
+            "retrying with tiled fallback model %s (tile=%s)",
+            cfg.replicate_fallback_model,
+            cfg.replicate_fallback_tile,
+        )
+
+        fallback_input = {
+            "img": data_uri,
+            "scale": cfg.upscale_factor,
+            "version": cfg.replicate_fallback_version_name,
+            "face_enhance": cfg.face_enhance,
+            "tile": cfg.replicate_fallback_tile,
+        }
+        return run_replicate_prediction(
+            cfg.replicate_fallback_model,
+            fallback_input,
+            cfg,
+        )
 
 def download_replicate_output(prediction: dict, cfg: Config) -> bytes:
     output = prediction.get("output")
