@@ -1,0 +1,15 @@
+[Unit]
+Description=Etsy image upscaling pipeline
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=YOUR_LINUX_USER
+WorkingDirectory=/home/YOUR_LINUX_USER/etsy-image-pipeline
+EnvironmentFile=/home/YOUR_LINUX_USER/etsy-image-pipeline/.env
+ExecStart=/home/YOUR_LINUX_USER/etsy-image-pipeline/.venv/bin/python /home/YOUR_LINUX_USER/etsy-image-pipeline/pipeline.py --once
+Nice=10
+
+[Install]
+WantedBy=multi-user.target
