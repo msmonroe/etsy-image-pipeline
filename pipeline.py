@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import base64
 import io
+import json
 import logging
 import os
 import sys
@@ -16,6 +17,8 @@ import dropbox
 import requests
 from dotenv import load_dotenv
 from PIL import Image
+
+from listing_images import generate_listing_images
 
 
 load_dotenv()
