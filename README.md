@@ -548,6 +548,7 @@ The current set is:
 Default configuration:
 
 ```text
+GENERATE_LISTING_IMAGES=true
 DROPBOX_LISTING_IMAGES_FOLDER=/Etsy/Listing-Images
 ETSY_LISTING_IMAGE_WIDTH=2400
 ETSY_LISTING_IMAGE_HEIGHT=2000
@@ -556,7 +557,9 @@ ETSY_LISTING_IMAGE_JPEG_QUALITY=90
 
 The 2400 x 2000 default keeps both dimensions above Etsy's current 2000-pixel recommendation for listing photos. Listing previews are JPEG because transparent PNG listing images are not suitable for Etsy display; buyer download PNGs remain transparent.
 
-Generate listing images for an upscaled asset:
+With `GENERATE_LISTING_IMAGES=true`, the main pipeline now generates listing images automatically after a successful upscale, uploads them to Dropbox, and writes them into the matching `.etsy.json` sidecar.
+
+You can still generate or regenerate them manually for an already-upscaled asset:
 
 ```bash
 python tools/generate_listing_images.py \
