@@ -28,6 +28,11 @@ class Config:
     approved_folder: str
     upscaled_folder: str
     needs_review_folder: str
+    listing_images_folder: str
+    generate_listing_images: bool
+    listing_image_width: int
+    listing_image_height: int
+    listing_image_jpeg_quality: int
     upscale_factor: int
     face_enhance: bool
     min_output_width: int
@@ -68,6 +73,11 @@ def load_config() -> Config:
         approved_folder=os.getenv("DROPBOX_APPROVED_FOLDER", "/Etsy/Approved"),
         upscaled_folder=os.getenv("DROPBOX_UPSCALED_FOLDER", "/Etsy/Upscaled"),
         needs_review_folder=os.getenv("DROPBOX_NEEDS_REVIEW_FOLDER", "/Etsy/Needs-Review"),
+        listing_images_folder=os.getenv("DROPBOX_LISTING_IMAGES_FOLDER", "/Etsy/Listing-Images"),
+        generate_listing_images=env_bool("GENERATE_LISTING_IMAGES", True),
+        listing_image_width=int(os.getenv("ETSY_LISTING_IMAGE_WIDTH", "2400")),
+        listing_image_height=int(os.getenv("ETSY_LISTING_IMAGE_HEIGHT", "2000")),
+        listing_image_jpeg_quality=int(os.getenv("ETSY_LISTING_IMAGE_JPEG_QUALITY", "90")),
         upscale_factor=factor,
         face_enhance=env_bool("FACE_ENHANCE", False),
         min_output_width=int(os.getenv("MIN_OUTPUT_WIDTH", "4500")),
@@ -176,6 +186,94 @@ def copy_sidecar_to_output(
     sidecar_bytes = download_dropbox_file(dbx, src_sidecar)
     upload_dropbox_file(dbx, dst_sidecar, sidecar_bytes, overwrite=overwrite)
     LOG.info("Copied Etsy sidecar -> %s", dst_sidecar)
+
+
+def generate_listing_assets(
+    dbx: dropbox.Dropbox,
+    src_image_path: str,
+    dst_image_path: str,
+    final_png: bytes,
+    cfg: Config,
+) -> None:
+    src_image = PurePosixPath(src_image_path)
+    src_sidecar = str(src_image.with_name(f"{src_image.stem}.etsy.json"))
+
+    if not dropbox_file_exists(dbx, src_sidecar):
+        LOG.info(
+            "No Etsy sidecar found for %s; listing-image generation skipped",
+            src_image.name,
+        )
+        return
+
+    metadata = json.loads(download_dropbox_file(dbx, src_sidecar).decode("utf-8"))
+    listing_key = str(metadata.get("listing_key") or src_image.stem)
+    safe_listing_key = "".join(
+        ch if ch.isalnum() or ch in {"-", "_"} else "_"
+        for ch in listing_key
+    ).strip("_") or src_image.stem
+
+    root = cfg.listing_images_folder.rstrip("/")
+    listing_folder = f"{root}/{safe_listing_key}"
+    ensure_dropbox_folder(dbx, listing_folder)
+
+    digital_filenames = [
+        item["filename"]
+        for item in metadata.get("digital_files", [])
+        if item.get("filename")
+    ]
+    generated = generate_listing_images(
+        final_png,
+        digital_filenames,
+        width=cfg.listing_image_width,
+        height=cfg.listing_image_height,
+        jpeg_quality=cfg.listing_image_jpeg_quality,
+    )
+
+    labels = {
+        "01_hero.jpg": "Primary product preview",
+        "02_detail.jpg": "Artwork detail preview",
+        "03_specs.jpg": "Digital file specifications",
+        "04_included.jpg": "Files included in this digital download",
+    }
+
+    listing_entries = []
+    for rank, (suffix, payload) in enumerate(generated.items(), start=1):
+        filename = f"{src_image.stem}_{suffix}"
+        path = f"{listing_folder}/{filename}"
+
+        if cfg.overwrite_output or not dropbox_file_exists(dbx, path):
+            upload_dropbox_file(
+                dbx,
+                path,
+                payload,
+                overwrite=cfg.overwrite_output,
+            )
+            LOG.info("Wrote listing image: %s", path)
+        else:
+            LOG.info("Listing image already exists, keeping it: %s", path)
+
+        listing_entries.append(
+            {
+                "filename": path,
+                "rank": rank,
+                "alt_text": labels[suffix],
+            }
+        )
+
+    metadata["listing_images"] = listing_entries
+    for item in metadata.get("digital_files", []):
+        if item.get("filename") == src_image.name:
+            item["dropbox_path"] = dst_image_path
+
+    metadata_bytes = (json.dumps(metadata, indent=2) + "\n").encode("utf-8")
+    upload_dropbox_file(dbx, src_sidecar, metadata_bytes, overwrite=True)
+
+    dst_sidecar = f"{cfg.upscaled_folder.rstrip('/')}/{src_image.stem}.etsy.json"
+    upload_dropbox_file(dbx, dst_sidecar, metadata_bytes, overwrite=True)
+    LOG.info(
+        "Updated Etsy sidecars with %s listing images",
+        len(listing_entries),
+    )
 
 
 def source_alpha(source_bytes: bytes) -> tuple[Optional[Image.Image], bool]:
@@ -367,12 +465,21 @@ def process_file(
     width, height, has_alpha = validate_output(source, final_png, cfg)
 
     upload_dropbox_file(dbx, dst_path, final_png, overwrite=cfg.overwrite_output)
-    copy_sidecar_to_output(
-        dbx,
-        src_path,
-        cfg.upscaled_folder,
-        overwrite=cfg.overwrite_output,
-    )
+    if cfg.generate_listing_images:
+        generate_listing_assets(
+            dbx,
+            src_path,
+            dst_path,
+            final_png,
+            cfg,
+        )
+    else:
+        copy_sidecar_to_output(
+            dbx,
+            src_path,
+            cfg.upscaled_folder,
+            overwrite=cfg.overwrite_output,
+        )
     LOG.info(
         "DONE %s -> %s (%sx%s, transparency=%s)",
         entry.name,
@@ -390,6 +497,8 @@ def run_once(limit: Optional[int] = None, only_file: Optional[str] = None) -> in
 
     ensure_dropbox_folder(dbx, cfg.approved_folder)
     ensure_dropbox_folder(dbx, cfg.upscaled_folder)
+    if cfg.generate_listing_images:
+        ensure_dropbox_folder(dbx, cfg.listing_images_folder)
     if cfg.copy_failures_to_review:
         ensure_dropbox_folder(dbx, cfg.needs_review_folder)
 
