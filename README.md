@@ -34,6 +34,9 @@ Python worker
         |      |
         |      +--> /Etsy/Upscaled/image.png
         |      +--> /Etsy/Upscaled/image.etsy.json
+        |      +--> generate 4 listing JPEGs
+        |      +--> /Etsy/Listing-Images/<listing_key>/
+        |      +--> update listing_images in both sidecars
         |
         +--> failure
                |
@@ -114,13 +117,16 @@ For a quick test, an access token is sufficient:
 DROPBOX_ACCESS_TOKEN=
 ```
 
-For unattended operation, refresh-token authentication is preferred:
+For unattended operation, refresh-token authentication is strongly preferred and is the configuration used by the working pipeline:
 
 ```text
+DROPBOX_ACCESS_TOKEN=
 DROPBOX_REFRESH_TOKEN=
 DROPBOX_APP_KEY=
 DROPBOX_APP_SECRET=
 ```
+
+When all three refresh-token values are present, the code automatically prefers refresh-token authentication and renews short-lived Dropbox access tokens as needed.
 
 Default folders:
 
@@ -142,7 +148,13 @@ Before involving Replicate, verify Dropbox independently:
 python dropbox_test/test_dropbox.py
 ```
 
-A successful run ends with:
+A successful refresh-token run begins with:
+
+```text
+Auth mode: refresh token
+```
+
+and ends with:
 
 ```text
 Dropbox application test PASSED.
@@ -541,9 +553,11 @@ The current set is:
 ```text
 01 hero      clean primary product preview
 02 detail    close-up artwork view
-03 specs     pixel dimensions / DPI / transparency / digital-only notice
+03 specs     two-column specs card with artwork left / text right
 04 included  summary of downloadable files
 ```
+
+The specs layout deliberately constrains artwork and typography to separate columns so tall artwork cannot overlap the file-information text.
 
 Default configuration:
 
@@ -620,3 +634,97 @@ REPLICATE_FALLBACK_TILE=200
 ```
 
 The fallback keeps the configured `UPSCALE_FACTOR` and the normal dimension/transparency validation still runs afterward.
+
+
+## Verified end-to-end status
+
+The pipeline has now been exercised successfully with multiple cat assets using Dropbox refresh-token authentication.
+
+A representative successful run produced:
+
+```text
+Source: 1263 x 1246 RGBA PNG
+Output: 5052 x 4984 PNG
+Transparency: preserved
+Listing images: 4 generated
+Sidecars: updated
+Failures: 0
+```
+
+The working sequence is now:
+
+```text
+/Etsy/Approved/image.png
+/Etsy/Approved/image.etsy.json
+        ->
+Replicate upscale
+        ->
+alpha restoration + 300 DPI PNG output
+        ->
+dimension/transparency validation
+        ->
+/Etsy/Upscaled/image.png
+/Etsy/Upscaled/image.etsy.json
+        ->
+4 Pillow-generated listing JPEGs
+        ->
+/Etsy/Listing-Images/<listing_key>/
+        ->
+listing_images metadata written back to sidecars
+```
+
+One tested asset completed with:
+
+```text
+attempted=1 processed=1 skipped=0 failures=0
+```
+
+This means Dropbox auth, Replicate processing, OOM recovery, alpha preservation, output upload, listing-image generation, and sidecar updates are all working together end-to-end.
+
+## Current recommended configuration
+
+For the current tested workflow:
+
+```text
+UPSCALE_FACTOR=4
+MIN_OUTPUT_WIDTH=4500
+MIN_OUTPUT_HEIGHT=4500
+OVERWRITE_OUTPUT=false
+
+GENERATE_LISTING_IMAGES=true
+DROPBOX_LISTING_IMAGES_FOLDER=/Etsy/Listing-Images
+ETSY_LISTING_IMAGE_WIDTH=2400
+ETSY_LISTING_IMAGE_HEIGHT=2000
+ETSY_LISTING_IMAGE_JPEG_QUALITY=90
+
+REPLICATE_FALLBACK_ON_OOM=true
+REPLICATE_FALLBACK_MODEL=xinntao/realesrgan
+REPLICATE_FALLBACK_TILE=400
+REPLICATE_FALLBACK_VERSION_NAME=General - v3
+
+ETSY_MODE=mock
+```
+
+Use `OVERWRITE_OUTPUT=true` only for deliberate reprocessing or listing-image regeneration, then return it to `false`.
+
+## What remains intentionally unfinished
+
+The image-production side is functional. The remaining Etsy work is still intentionally gated:
+
+```text
+fill title / description / price / tags / taxonomy
+        ->
+approve IP review
+        ->
+mock Etsy draft
+        ->
+mock asset uploads
+        ->
+later add real Etsy credentials
+        ->
+create drafts only
+        ->
+human review before any publication
+```
+
+Automatic Etsy publication is not enabled.
