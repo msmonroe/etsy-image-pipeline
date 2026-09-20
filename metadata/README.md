@@ -60,3 +60,70 @@ Every sidecar contains:
 ```
 
 A future listing builder should refuse to create an Etsy draft unless `ip_review.status` is `approved`.
+
+## Listing images and buyer download files
+
+The sidecar now tracks both kinds of Etsy assets explicitly:
+
+```json
+"listing_images": [
+  {
+    "filename": "samurai_cat_halloween_preview.jpg",
+    "rank": 1,
+    "alt_text": "Halloween samurai cat digital art preview"
+  }
+],
+"digital_files": [
+  {
+    "filename": "samurai_cat_halloween_witch_black_master.png",
+    "display_name": "Samurai Cat Witch PNG"
+  }
+]
+```
+
+Filenames are resolved relative to the sidecar file unless an absolute path is supplied.
+
+The metadata generator seeds the source filename into `digital_files` because the current upscaler preserves the basename when writing the production PNG. Listing preview/mockup images are left empty until they are generated.
+
+## Mock Etsy API
+
+The repository contains a mockable Etsy API layer:
+
+```text
+etsy_api.py
+tools/create_etsy_draft.py
+```
+
+Keep this in `.env` while developing:
+
+```text
+ETSY_MODE=mock
+ETSY_API_KEYSTRING=
+ETSY_SHARED_SECRET=
+ETSY_ACCESS_TOKEN=
+ETSY_SHOP_ID=
+ETSY_OUTBOX_DIR=.etsy_mock_outbox
+```
+
+To rehearse draft creation:
+
+```bash
+python tools/create_etsy_draft.py path/to/item.etsy.json
+```
+
+To also rehearse listing-image and digital-file uploads:
+
+```bash
+python tools/create_etsy_draft.py path/to/item.etsy.json --include-assets
+```
+
+Mock calls write JSON event records into `.etsy_mock_outbox/`. Nothing is sent to Etsy.
+
+The draft tool refuses to proceed unless:
+
+- `ip_review.status` is `approved`
+- `original_art_only` is `true`
+- required Etsy listing fields are populated
+- the listing type is `download`
+
+Even after real credentials are added, `ETSY_MODE=real` is not enough by itself. The command also requires the explicit `--allow-real-api` switch. This is a second safety latch so a local configuration change cannot accidentally send requests to Etsy.
