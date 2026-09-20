@@ -31,7 +31,11 @@ This gives us two stable identifiers:
 - `asset_key`: exactly which image/file this metadata belongs to
 - `listing_key`: which Etsy product/bundle it belongs to
 
-## Create a sidecar
+## Create a sidecar in Dropbox
+
+The metadata tool now writes the JSON beside the Dropbox image it describes.
+
+With a basename:
 
 ```bash
 python tools/create_etsy_metadata.py \
@@ -39,11 +43,22 @@ python tools/create_etsy_metadata.py \
   --listing-key samurai_cat_halloween
 ```
 
-This produces:
+The basename resolves under `DROPBOX_APPROVED_FOLDER`, so with the default configuration this creates:
 
 ```text
-samurai_cat_halloween_witch_black_master.etsy.json
+/Etsy/Approved/samurai_cat_halloween_witch_black_master.png
+/Etsy/Approved/samurai_cat_halloween_witch_black_master.etsy.json
 ```
+
+You can also pass the full Dropbox path explicitly:
+
+```bash
+python tools/create_etsy_metadata.py \
+  /Etsy/Approved/samurai_cat_halloween_witch_black_master.png \
+  --listing-key samurai_cat_halloween
+```
+
+Use `--force` only when you intentionally want to replace an existing sidecar.
 
 The metadata starts in `metadata_only` state. It is not permission to publish anything. Future Etsy automation should create drafts only until a human review step is explicitly enabled.
 
@@ -127,3 +142,24 @@ The draft tool refuses to proceed unless:
 - the listing type is `download`
 
 Even after real credentials are added, `ETSY_MODE=real` is not enough by itself. The command also requires the explicit `--allow-real-api` switch. This is a second safety latch so a local configuration change cannot accidentally send requests to Etsy.
+
+
+## Sidecar movement through the image pipeline
+
+After a PNG is successfully upscaled, the worker looks for a matching sidecar in the source folder.
+
+Example:
+
+```text
+/Etsy/Approved/cat.png
+/Etsy/Approved/cat.etsy.json
+```
+
+A successful processing run writes:
+
+```text
+/Etsy/Upscaled/cat.png
+/Etsy/Upscaled/cat.etsy.json
+```
+
+If no matching sidecar exists, image processing still succeeds and the worker logs that no Etsy sidecar was found.
