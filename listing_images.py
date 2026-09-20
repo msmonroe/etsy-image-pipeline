@@ -150,21 +150,61 @@ def specs_image(
     transparent: bool,
 ) -> bytes:
     canvas = Image.new("RGBA", (spec.width, spec.height), (250, 250, 247, 255))
-    _shadowed_art(canvas, art, (1040, 1100), y_offset=-120)
-
     draw = ImageDraw.Draw(canvas)
-    title_font = _font(86, bold=True)
-    body_font = _font(54)
-    small_font = _font(42)
+
+    margin_x = max(90, spec.width // 24)
+    top = max(100, spec.height // 18)
+    bottom = max(110, spec.height // 18)
+    gutter = max(90, spec.width // 30)
+
+    left_width = int(spec.width * 0.45)
+    right_x = margin_x + left_width + gutter
+    right_width = spec.width - right_x - margin_x
+
+    item = _contain_rgba(
+        art,
+        (
+            left_width - max(80, spec.width // 30),
+            spec.height - top - bottom,
+        ),
+    )
+    art_x = margin_x + (left_width - item.width) // 2
+    art_y = top + (spec.height - top - bottom - item.height) // 2
+
+    alpha = item.getchannel("A")
+    shadow_mask = Image.new("L", canvas.size, 0)
+    shadow_mask.paste(alpha, (art_x + 24, art_y + 30))
+    shadow_mask = shadow_mask.filter(ImageFilter.GaussianBlur(24))
+    shadow = Image.new("RGBA", canvas.size, (0, 0, 0, 80))
+    shadow.putalpha(shadow_mask)
+    canvas.alpha_composite(shadow)
+    canvas.alpha_composite(item, (art_x, art_y))
+
+    divider_x = margin_x + left_width + gutter // 2
+    draw.line(
+        (divider_x, top, divider_x, spec.height - bottom),
+        fill=(210, 210, 205, 255),
+        width=max(3, spec.width // 800),
+    )
+
+    title_font = _font(max(58, spec.width // 34), bold=True)
+    body_font = _font(max(42, spec.width // 48))
+    small_font = _font(max(30, spec.width // 68))
 
     title = "DIGITAL PNG DOWNLOAD"
-    box = draw.textbbox((0, 0), title, font=title_font)
-    draw.text(
-        ((spec.width - (box[2] - box[0])) // 2, 1240),
-        title,
-        font=title_font,
-        fill=(31, 31, 34),
-    )
+    title_lines = _wrap(draw, title, title_font, right_width)
+    y = top + max(40, spec.height // 40)
+    for line in title_lines:
+        box = draw.textbbox((0, 0), line, font=title_font)
+        draw.text(
+            (right_x, y),
+            line,
+            font=title_font,
+            fill=(31, 31, 34),
+        )
+        y += (box[3] - box[1]) + max(18, spec.height // 100)
+
+    y += max(50, spec.height // 28)
 
     bullets = [
         f"{pixel_size[0]} × {pixel_size[1]} pixels",
@@ -172,24 +212,36 @@ def specs_image(
         "Transparent background" if transparent else "Opaque background",
         "No physical item will be shipped",
     ]
-    y = 1380
+    bullet_gap = max(34, spec.height // 42)
     for bullet in bullets:
-        lines = _wrap(draw, bullet, body_font, 1900)
-        y = (
-            _draw_centered_lines(
-                draw, lines, y, body_font, (58, 58, 63), spec.width, 12
+        lines = _wrap(draw, bullet, body_font, right_width)
+        for line in lines:
+            box = draw.textbbox((0, 0), line, font=body_font)
+            draw.text(
+                (right_x, y),
+                line,
+                font=body_font,
+                fill=(58, 58, 63),
             )
-            + 20
-        )
+            y += (box[3] - box[1]) + max(10, spec.height // 140)
+        y += bullet_gap
 
     footer = (
         "Production file shown for reference. "
         "Listing preview is flattened to JPEG."
     )
-    lines = _wrap(draw, footer, small_font, 2000)
-    _draw_centered_lines(
-        draw, lines, 1850, small_font, (95, 95, 100), spec.width, 8
-    )
+    footer_lines = _wrap(draw, footer, small_font, right_width)
+    footer_y = spec.height - bottom - max(110, spec.height // 10)
+    for line in footer_lines:
+        box = draw.textbbox((0, 0), line, font=small_font)
+        draw.text(
+            (right_x, footer_y),
+            line,
+            font=small_font,
+            fill=(95, 95, 100),
+        )
+        footer_y += (box[3] - box[1]) + max(8, spec.height // 160)
+
     return _jpeg_bytes(canvas, spec.jpeg_quality)
 
 
