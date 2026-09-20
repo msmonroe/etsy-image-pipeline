@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Etsy Asset Metadata",
+  "type": "object",
+  "required": [
+    "asset_key",
+    "source_filename",
+    "listing_key",
+    "role",
+    "ip_review",
+    "etsy",
+    "listing_images",
+    "digital_files"
+  ],
+  "properties": {
+    "asset_key": {
+      "type": "string",
+      "description": "Stable key derived from the exact source filename stem."
+    },
+    "source_filename": {
+      "type": "string"
+    },
+    "listing_key": {
+      "type": "string",
+      "description": "Groups one or more assets into one future Etsy listing/bundle."
+    },
+    "role": {
+      "type": "string",
+      "enum": ["master", "bundle_member", "preview", "mockup", "download"]
+    },
+    "ip_review": {
+      "type": "object",
+      "required": ["status", "original_art_only", "notes"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["pending", "approved", "needs_review"]
+        },
+        "original_art_only": {
+          "type": "boolean"
+        },
+        "notes": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "image": {
+      "type": "object",
+      "properties": {
+        "target_width_px": {"type": ["integer", "null"]},
+        "target_height_px": {"type": ["integer", "null"]},
+        "dpi": {"type": "integer", "default": 300},
+        "transparent": {"type": "boolean", "default": true},
+        "format": {"type": "string", "default": "PNG"}
+      },
+      "additionalProperties": false
+    },
+    "listing_images": {
+      "type": "array",
+      "description": "Images shown on the Etsy listing page. Filenames are relative to the sidecar unless absolute.",
+      "items": {
+        "type": "object",
+        "required": ["filename"],
+        "properties": {
+          "filename": {"type": "string"},
+          "rank": {"type": ["integer", "null"], "minimum": 1},
+          "alt_text": {"type": ["string", "null"]}
+        },
+        "additionalProperties": false
+      }
+    },
+    "digital_files": {
+      "type": "array",
+      "description": "Files delivered to the buyer. Filenames are relative to the sidecar unless absolute.",
+      "items": {
+        "type": "object",
+        "required": ["filename"],
+        "properties": {
+          "filename": {"type": "string"},
+          "dropbox_path": {"type": ["string", "null"]},
+          "display_name": {"type": ["string", "null"]}
+        },
+        "additionalProperties": false
+      }
+    },
+    "etsy": {
+      "type": "object",
+      "required": [
+        "title",
+        "description",
+        "price",
+        "quantity",
+        "who_made",
+        "when_made",
+        "taxonomy_id",
+        "type",
+        "tags"
+      ],
+      "properties": {
+        "title": {"type": "string"},
+        "description": {"type": "string"},
+        "price": {"type": ["number", "null"]},
+        "quantity": {"type": "integer", "minimum": 1},
+        "who_made": {"type": "string", "default": "i_did"},
+        "when_made": {"type": "string", "default": "2020_2026"},
+        "taxonomy_id": {"type": ["integer", "null"]},
+        "type": {"type": "string", "const": "download"},
+        "tags": {
+          "type": "array",
+          "items": {"type": "string"},
+          "maxItems": 13
+        },
+        "materials": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "sku": {"type": ["string", "null"]},
+        "listing_id": {"type": ["integer", "null"]},
+        "state": {
+          "type": "string",
+          "enum": ["metadata_only", "draft", "active"],
+          "default": "metadata_only"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

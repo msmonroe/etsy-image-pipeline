@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import io
+import json
 import logging
 import os
 import sys
-import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import PurePosixPath
@@ -16,6 +17,8 @@ import dropbox
 import requests
 from dotenv import load_dotenv
 from PIL import Image
+
+from listing_images import generate_listing_images
 
 
 load_dotenv()
@@ -28,17 +31,28 @@ class Config:
     approved_folder: str
     upscaled_folder: str
     needs_review_folder: str
+    listing_images_folder: str
+    generate_listing_images: bool
+    listing_image_width: int
+    listing_image_height: int
+    listing_image_jpeg_quality: int
     upscale_factor: int
     face_enhance: bool
     min_output_width: int
     min_output_height: int
+    dimension_tolerance_px: int
     request_timeout: int
     poll_interval: int
     max_poll_seconds: int
     copy_failures_to_review: bool
     overwrite_output: bool
     replicate_api_token: str
+    replicate_model: str
     replicate_model_version: str
+    replicate_fallback_on_oom: bool
+    replicate_fallback_model: str
+    replicate_fallback_tile: int
+    replicate_fallback_version_name: str
 
 
 def env_bool(name: str, default: bool = False) -> bool:
@@ -50,12 +64,13 @@ def env_bool(name: str, default: bool = False) -> bool:
 
 def load_config() -> Config:
     token = os.getenv("REPLICATE_API_TOKEN", "").strip()
+    model = os.getenv("REPLICATE_MODEL", "nightmareai/real-esrgan").strip()
     version = os.getenv("REPLICATE_MODEL_VERSION", "").strip()
 
     if not token:
         raise RuntimeError("REPLICATE_API_TOKEN is required")
-    if not version:
-        raise RuntimeError("REPLICATE_MODEL_VERSION is required")
+    if "/" not in model:
+        raise RuntimeError("REPLICATE_MODEL must look like owner/model")
 
     factor = int(os.getenv("UPSCALE_FACTOR", "3"))
     if factor < 2 or factor > 8:
@@ -65,17 +80,32 @@ def load_config() -> Config:
         approved_folder=os.getenv("DROPBOX_APPROVED_FOLDER", "/Etsy/Approved"),
         upscaled_folder=os.getenv("DROPBOX_UPSCALED_FOLDER", "/Etsy/Upscaled"),
         needs_review_folder=os.getenv("DROPBOX_NEEDS_REVIEW_FOLDER", "/Etsy/Needs-Review"),
+        listing_images_folder=os.getenv("DROPBOX_LISTING_IMAGES_FOLDER", "/Etsy/Listing-Images"),
+        generate_listing_images=env_bool("GENERATE_LISTING_IMAGES", True),
+        listing_image_width=int(os.getenv("ETSY_LISTING_IMAGE_WIDTH", "2400")),
+        listing_image_height=int(os.getenv("ETSY_LISTING_IMAGE_HEIGHT", "2000")),
+        listing_image_jpeg_quality=int(os.getenv("ETSY_LISTING_IMAGE_JPEG_QUALITY", "90")),
         upscale_factor=factor,
         face_enhance=env_bool("FACE_ENHANCE", False),
-        min_output_width=int(os.getenv("MIN_OUTPUT_WIDTH", "4000")),
-        min_output_height=int(os.getenv("MIN_OUTPUT_HEIGHT", "4000")),
+        min_output_width=int(os.getenv("MIN_OUTPUT_WIDTH", "4500")),
+        min_output_height=int(os.getenv("MIN_OUTPUT_HEIGHT", "4500")),
+        dimension_tolerance_px=int(os.getenv("DIMENSION_TOLERANCE_PX", "8")),
         request_timeout=int(os.getenv("REQUEST_TIMEOUT_SECONDS", "300")),
         poll_interval=int(os.getenv("POLL_INTERVAL_SECONDS", "2")),
         max_poll_seconds=int(os.getenv("MAX_POLL_SECONDS", "900")),
         copy_failures_to_review=env_bool("COPY_FAILURES_TO_REVIEW", True),
         overwrite_output=env_bool("OVERWRITE_OUTPUT", False),
         replicate_api_token=token,
+        replicate_model=model,
         replicate_model_version=version,
+        replicate_fallback_on_oom=env_bool("REPLICATE_FALLBACK_ON_OOM", True),
+        replicate_fallback_model=os.getenv(
+            "REPLICATE_FALLBACK_MODEL", "xinntao/realesrgan"
+        ).strip(),
+        replicate_fallback_tile=int(os.getenv("REPLICATE_FALLBACK_TILE", "400")),
+        replicate_fallback_version_name=os.getenv(
+            "REPLICATE_FALLBACK_VERSION_NAME", "General - v3"
+        ).strip(),
     )
 
 
@@ -154,83 +184,264 @@ def copy_to_review(dbx: dropbox.Dropbox, src_path: str, review_folder: str) -> N
     LOG.warning("Copied failed source to %s", dst)
 
 
+def copy_sidecar_to_output(
+    dbx: dropbox.Dropbox,
+    src_image_path: str,
+    output_folder: str,
+    overwrite: bool,
+) -> None:
+    src_image = PurePosixPath(src_image_path)
+    src_sidecar = str(src_image.with_name(f"{src_image.stem}.etsy.json"))
+
+    if not dropbox_file_exists(dbx, src_sidecar):
+        LOG.info("No Etsy sidecar found for %s", src_image.name)
+        return
+
+    dst_sidecar = f"{output_folder.rstrip('/')}/{PurePosixPath(src_sidecar).name}"
+    sidecar_bytes = download_dropbox_file(dbx, src_sidecar)
+    upload_dropbox_file(dbx, dst_sidecar, sidecar_bytes, overwrite=overwrite)
+    LOG.info("Copied Etsy sidecar -> %s", dst_sidecar)
+
+
+def generate_listing_assets(
+    dbx: dropbox.Dropbox,
+    src_image_path: str,
+    dst_image_path: str,
+    final_png: bytes,
+    cfg: Config,
+) -> None:
+    src_image = PurePosixPath(src_image_path)
+    src_sidecar = str(src_image.with_name(f"{src_image.stem}.etsy.json"))
+
+    if not dropbox_file_exists(dbx, src_sidecar):
+        LOG.info(
+            "No Etsy sidecar found for %s; listing-image generation skipped",
+            src_image.name,
+        )
+        return
+
+    metadata = json.loads(download_dropbox_file(dbx, src_sidecar).decode("utf-8"))
+    listing_key = str(metadata.get("listing_key") or src_image.stem)
+    safe_listing_key = "".join(
+        ch if ch.isalnum() or ch in {"-", "_"} else "_"
+        for ch in listing_key
+    ).strip("_") or src_image.stem
+
+    root = cfg.listing_images_folder.rstrip("/")
+    listing_folder = f"{root}/{safe_listing_key}"
+    ensure_dropbox_folder(dbx, listing_folder)
+
+    digital_filenames = [
+        item["filename"]
+        for item in metadata.get("digital_files", [])
+        if item.get("filename")
+    ]
+    generated = generate_listing_images(
+        final_png,
+        digital_filenames,
+        width=cfg.listing_image_width,
+        height=cfg.listing_image_height,
+        jpeg_quality=cfg.listing_image_jpeg_quality,
+    )
+
+    labels = {
+        "01_hero.jpg": "Primary product preview",
+        "02_detail.jpg": "Artwork detail preview",
+        "03_specs.jpg": "Digital file specifications",
+        "04_included.jpg": "Files included in this digital download",
+    }
+
+    listing_entries = []
+    for rank, (suffix, payload) in enumerate(generated.items(), start=1):
+        filename = f"{src_image.stem}_{suffix}"
+        path = f"{listing_folder}/{filename}"
+
+        if cfg.overwrite_output or not dropbox_file_exists(dbx, path):
+            upload_dropbox_file(
+                dbx,
+                path,
+                payload,
+                overwrite=cfg.overwrite_output,
+            )
+            LOG.info("Wrote listing image: %s", path)
+        else:
+            LOG.info("Listing image already exists, keeping it: %s", path)
+
+        listing_entries.append(
+            {
+                "filename": path,
+                "rank": rank,
+                "alt_text": labels[suffix],
+            }
+        )
+
+    metadata["listing_images"] = listing_entries
+    for item in metadata.get("digital_files", []):
+        if item.get("filename") == src_image.name:
+            item["dropbox_path"] = dst_image_path
+
+    metadata_bytes = (json.dumps(metadata, indent=2) + "\n").encode("utf-8")
+    upload_dropbox_file(dbx, src_sidecar, metadata_bytes, overwrite=True)
+
+    dst_sidecar = f"{cfg.upscaled_folder.rstrip('/')}/{src_image.stem}.etsy.json"
+    upload_dropbox_file(dbx, dst_sidecar, metadata_bytes, overwrite=True)
+    LOG.info(
+        "Updated Etsy sidecars with %s listing images",
+        len(listing_entries),
+    )
+
+
 def source_alpha(source_bytes: bytes) -> tuple[Optional[Image.Image], bool]:
     with Image.open(io.BytesIO(source_bytes)) as img:
         rgba = img.convert("RGBA")
         alpha = rgba.getchannel("A")
-        lo, hi = alpha.getextrema()
+        lo, _ = alpha.getextrema()
         has_transparency = lo < 255
         return alpha.copy(), has_transparency
 
 
-def run_replicate_upscale(source_bytes: bytes, cfg: Config) -> bytes:
+def replicate_model_url(model: str) -> str:
+    if "/" not in model:
+        raise RuntimeError("Replicate model must look like owner/model")
+    owner, name = model.split("/", 1)
+    return f"https://api.replicate.com/v1/models/{owner}/{name}/predictions"
+
+
+def run_replicate_prediction(
+    model: str,
+    input_payload: dict,
+    cfg: Config,
+    version_id: str = "",
+) -> bytes:
     headers = {
         "Authorization": f"Bearer {cfg.replicate_api_token}",
         "Accept": "application/json",
+        "Content-Type": "application/json",
     }
 
-    create_url = "https://api.replicate.com/v1/predictions"
-
-    files = {
-        "image": ("input.png", source_bytes, "image/png"),
-    }
-
-    # Replicate prediction endpoints generally accept JSON/base64 or hosted URLs.
-    # To avoid committing provider-specific hosting logic, this worker uses a
-    # data URI for the source image.
-    import base64
-
-    data_uri = "data:image/png;base64," + base64.b64encode(source_bytes).decode("ascii")
-
-    payload = {
-        "version": cfg.replicate_model_version,
-        "input": {
-            "image": data_uri,
-            "scale": cfg.upscale_factor,
-            "face_enhance": cfg.face_enhance,
-        },
-    }
+    if version_id:
+        create_url = "https://api.replicate.com/v1/predictions"
+        payload = {"version": version_id, "input": input_payload}
+    else:
+        create_url = replicate_model_url(model)
+        payload = {"input": input_payload}
 
     response = requests.post(
         create_url,
-        headers={**headers, "Content-Type": "application/json"},
+        headers=headers,
         json=payload,
         timeout=cfg.request_timeout,
     )
-    response.raise_for_status()
+    if not response.ok:
+        raise RuntimeError(
+            f"Replicate create request failed HTTP {response.status_code}: "
+            f"{response.text[:2000]}"
+        )
+
     prediction = response.json()
+    if prediction.get("status") == "succeeded":
+        return download_replicate_output(prediction, cfg)
 
     get_url = prediction.get("urls", {}).get("get")
     if not get_url:
-        raise RuntimeError(f"Replicate response did not include polling URL: {prediction}")
+        raise RuntimeError(
+            f"Replicate response did not include polling URL: {prediction}"
+        )
 
     deadline = time.monotonic() + cfg.max_poll_seconds
     while True:
         if time.monotonic() > deadline:
             raise TimeoutError("Replicate prediction timed out")
 
-        poll = requests.get(get_url, headers=headers, timeout=cfg.request_timeout)
-        poll.raise_for_status()
+        poll = requests.get(
+            get_url,
+            headers=headers,
+            timeout=cfg.request_timeout,
+        )
+        if not poll.ok:
+            raise RuntimeError(
+                f"Replicate poll failed HTTP {poll.status_code}: "
+                f"{poll.text[:2000]}"
+            )
+
         prediction = poll.json()
         status = prediction.get("status")
 
         if status == "succeeded":
-            output = prediction.get("output")
-            if isinstance(output, list):
-                output = output[0] if output else None
-            if not isinstance(output, str) or not output.startswith("http"):
-                raise RuntimeError(f"Unexpected Replicate output: {prediction.get('output')!r}")
-
-            image_response = requests.get(output, timeout=cfg.request_timeout)
-            image_response.raise_for_status()
-            return image_response.content
+            return download_replicate_output(prediction, cfg)
 
         if status in {"failed", "canceled"}:
             raise RuntimeError(
-                f"Replicate prediction {status}: {prediction.get('error') or prediction}"
+                f"Replicate prediction {status}: "
+                f"{prediction.get('error') or prediction}"
             )
 
         time.sleep(cfg.poll_interval)
+
+
+def is_cuda_oom(error: Exception) -> bool:
+    message = str(error).lower()
+    return (
+        "cuda out of memory" in message
+        or "out of gpu memory" in message
+        or "out-of-gpu-memory" in message
+    )
+
+
+def run_replicate_upscale(source_bytes: bytes, cfg: Config) -> bytes:
+    data_uri = (
+        "data:image/png;base64,"
+        + base64.b64encode(source_bytes).decode("ascii")
+    )
+
+    primary_input = {
+        "image": data_uri,
+        "scale": cfg.upscale_factor,
+        "face_enhance": cfg.face_enhance,
+    }
+
+    try:
+        return run_replicate_prediction(
+            cfg.replicate_model,
+            primary_input,
+            cfg,
+            version_id=cfg.replicate_model_version,
+        )
+    except Exception as exc:
+        if not cfg.replicate_fallback_on_oom or not is_cuda_oom(exc):
+            raise
+
+        LOG.warning(
+            "Primary Replicate model ran out of GPU memory; "
+            "retrying with tiled fallback model %s (tile=%s)",
+            cfg.replicate_fallback_model,
+            cfg.replicate_fallback_tile,
+        )
+
+        fallback_input = {
+            "img": data_uri,
+            "scale": cfg.upscale_factor,
+            "version": cfg.replicate_fallback_version_name,
+            "face_enhance": cfg.face_enhance,
+            "tile": cfg.replicate_fallback_tile,
+        }
+        return run_replicate_prediction(
+            cfg.replicate_fallback_model,
+            fallback_input,
+            cfg,
+        )
+
+def download_replicate_output(prediction: dict, cfg: Config) -> bytes:
+    output = prediction.get("output")
+    if isinstance(output, list):
+        output = output[0] if output else None
+
+    if not isinstance(output, str) or not output.startswith("http"):
+        raise RuntimeError(f"Unexpected Replicate output: {prediction.get('output')!r}")
+
+    image_response = requests.get(output, timeout=cfg.request_timeout)
+    image_response.raise_for_status()
+    return image_response.content
 
 
 def restore_alpha(source_bytes: bytes, upscaled_bytes: bytes) -> bytes:
@@ -247,7 +458,12 @@ def restore_alpha(source_bytes: bytes, upscaled_bytes: bytes) -> bytes:
             final = rgb.convert("RGBA")
 
         output = io.BytesIO()
-        final.save(output, format="PNG", optimize=True)
+        final.save(
+            output,
+            format="PNG",
+            optimize=True,
+            dpi=(300, 300),
+        )
         return output.getvalue()
 
 
@@ -257,6 +473,9 @@ def validate_output(
     cfg: Config,
 ) -> tuple[int, int, bool]:
     _, source_has_transparency = source_alpha(source_bytes)
+
+    with Image.open(io.BytesIO(source_bytes)) as source_img:
+        source_width, source_height = source_img.size
 
     with Image.open(io.BytesIO(output_bytes)) as img:
         img.verify()
@@ -272,6 +491,17 @@ def validate_output(
         raise ValueError(
             f"Upscaled image too small: {width}x{height}; "
             f"minimum is {cfg.min_output_width}x{cfg.min_output_height}"
+        )
+
+    expected_width = source_width * cfg.upscale_factor
+    expected_height = source_height * cfg.upscale_factor
+    if (
+        abs(width - expected_width) > cfg.dimension_tolerance_px
+        or abs(height - expected_height) > cfg.dimension_tolerance_px
+    ):
+        raise ValueError(
+            f"Unexpected output dimensions: {width}x{height}; expected about "
+            f"{expected_width}x{expected_height} (+/- {cfg.dimension_tolerance_px}px)"
         )
 
     if source_has_transparency and not output_has_transparency:
@@ -299,13 +529,33 @@ def process_file(
     source = download_dropbox_file(dbx, src_path)
 
     with Image.open(io.BytesIO(source)) as src_img:
-        LOG.info("Source dimensions: %sx%s mode=%s", *src_img.size, src_img.mode)
+        LOG.info(
+            "Source dimensions: %sx%s mode=%s format=%s",
+            *src_img.size,
+            src_img.mode,
+            src_img.format,
+        )
 
     upscaled_raw = run_replicate_upscale(source, cfg)
     final_png = restore_alpha(source, upscaled_raw)
     width, height, has_alpha = validate_output(source, final_png, cfg)
 
     upload_dropbox_file(dbx, dst_path, final_png, overwrite=cfg.overwrite_output)
+    if cfg.generate_listing_images:
+        generate_listing_assets(
+            dbx,
+            src_path,
+            dst_path,
+            final_png,
+            cfg,
+        )
+    else:
+        copy_sidecar_to_output(
+            dbx,
+            src_path,
+            cfg.upscaled_folder,
+            overwrite=cfg.overwrite_output,
+        )
     LOG.info(
         "DONE %s -> %s (%sx%s, transparency=%s)",
         entry.name,
@@ -317,26 +567,39 @@ def process_file(
     return True
 
 
-def run_once(limit: Optional[int] = None) -> int:
+def run_once(limit: Optional[int] = None, only_file: Optional[str] = None) -> int:
     cfg = load_config()
     dbx = make_dropbox_client()
 
     ensure_dropbox_folder(dbx, cfg.approved_folder)
     ensure_dropbox_folder(dbx, cfg.upscaled_folder)
+    if cfg.generate_listing_images:
+        ensure_dropbox_folder(dbx, cfg.listing_images_folder)
     if cfg.copy_failures_to_review:
         ensure_dropbox_folder(dbx, cfg.needs_review_folder)
 
+    attempted = 0
     processed = 0
+    skipped = 0
     failures = 0
+    matched_file = False
 
     for entry in list_pngs(dbx, cfg.approved_folder):
-        if limit is not None and processed >= limit:
+        if only_file and entry.name != only_file:
+            continue
+
+        matched_file = True
+        if limit is not None and attempted >= limit:
             break
+
+        attempted += 1
 
         try:
             changed = process_file(dbx, entry, cfg)
             if changed:
                 processed += 1
+            else:
+                skipped += 1
         except Exception:
             failures += 1
             LOG.exception("FAILED %s", entry.name)
@@ -346,7 +609,17 @@ def run_once(limit: Optional[int] = None) -> int:
                 except Exception:
                     LOG.exception("Could not copy %s to Needs-Review", entry.name)
 
-    LOG.info("Run complete. processed=%s failures=%s", processed, failures)
+    if only_file and not matched_file:
+        LOG.error("Requested source file was not found in %s: %s", cfg.approved_folder, only_file)
+        return 1
+
+    LOG.info(
+        "Run complete. attempted=%s processed=%s skipped=%s failures=%s",
+        attempted,
+        processed,
+        skipped,
+        failures,
+    )
     return 1 if failures else 0
 
 
@@ -361,7 +634,13 @@ def parse_args() -> argparse.Namespace:
         "--limit",
         type=int,
         default=None,
-        help="Maximum number of newly processed files for this run.",
+        help="Maximum number of files attempted during this run.",
+    )
+    parser.add_argument(
+        "--file",
+        dest="only_file",
+        default=None,
+        help="Process only this exact PNG basename from the Approved folder.",
     )
     return parser.parse_args()
 
@@ -378,7 +657,7 @@ def main() -> int:
         LOG.info("No daemon loop is implemented by design; running one pass.")
 
     try:
-        return run_once(limit=args.limit)
+        return run_once(limit=args.limit, only_file=args.only_file)
     except KeyboardInterrupt:
         LOG.warning("Interrupted")
         return 130
