@@ -3,8 +3,10 @@ from __future__ import annotations
 import io
 
 from PIL import Image
+import pytest
+from pydantic import ValidationError
 
-from listing_images import generate_listing_images
+from listing_images import ListingImageSpec, generate_listing_images
 
 
 def test_generate_listing_images_returns_expected_assets(png_bytes):
