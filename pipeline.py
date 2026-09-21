@@ -203,6 +203,81 @@ def copy_sidecar_to_output(
     LOG.info("Copied Etsy sidecar -> %s", dst_sidecar)
 
 
+def build_default_etsy_metadata(
+    src_image_path: str,
+    dst_image_path: str,
+    final_png: bytes,
+) -> dict:
+    src_image = PurePosixPath(src_image_path)
+    with Image.open(io.BytesIO(final_png)) as image:
+        width, height = image.size
+        rgba = image.convert("RGBA")
+        min_alpha, _ = rgba.getchannel("A").getextrema()
+        has_transparency = min_alpha < 255
+        dpi = image.info.get("dpi") or (300, 300)
+        dpi_value = int(round(dpi[0]))
+
+    return {
+        "asset_key": src_image.stem,
+        "source_filename": src_image.name,
+        "listing_key": src_image.stem,
+        "role": "master",
+        "ip_review": {
+            "status": "pending",
+            "original_art_only": True,
+            "notes": "",
+        },
+        "image": {
+            "width_px": width,
+            "height_px": height,
+            "dpi": dpi_value,
+            "transparent": has_transparency,
+            "format": "PNG",
+        },
+        "listing_images": [],
+        "digital_files": [
+            {
+                "filename": src_image.name,
+                "display_name": src_image.name,
+                "dropbox_path": dst_image_path,
+            }
+        ],
+        "etsy": {
+            "title": "",
+            "description": "",
+            "price": None,
+            "quantity": 999,
+            "who_made": "i_did",
+            "when_made": "2020_2026",
+            "taxonomy_id": None,
+            "type": "download",
+            "tags": [],
+            "materials": [],
+            "sku": None,
+            "listing_id": None,
+            "state": "metadata_only",
+        },
+    }
+
+
+def ensure_etsy_sidecar(
+    dbx: dropbox.Dropbox,
+    src_image_path: str,
+    dst_image_path: str,
+    final_png: bytes,
+) -> str:
+    src_image = PurePosixPath(src_image_path)
+    src_sidecar = str(src_image.with_name(f"{src_image.stem}.etsy.json"))
+    if dropbox_file_exists(dbx, src_sidecar):
+        return src_sidecar
+
+    metadata = build_default_etsy_metadata(src_image_path, dst_image_path, final_png)
+    metadata_bytes = (json.dumps(metadata, indent=2) + "\\n").encode("utf-8")
+    upload_dropbox_file(dbx, src_sidecar, metadata_bytes, overwrite=False)
+    LOG.info("Created Etsy sidecar from processed asset -> %s", src_sidecar)
+    return src_sidecar
+
+
 def generate_listing_assets(
     dbx: dropbox.Dropbox,
     src_image_path: str,
@@ -541,6 +616,7 @@ def process_file(
     width, height, has_alpha = validate_output(source, final_png, cfg)
 
     upload_dropbox_file(dbx, dst_path, final_png, overwrite=cfg.overwrite_output)
+    ensure_etsy_sidecar(dbx, src_path, dst_path, final_png)
     if cfg.generate_listing_images:
         generate_listing_assets(
             dbx,
