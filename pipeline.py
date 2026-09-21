@@ -272,7 +272,7 @@ def ensure_etsy_sidecar(
         return src_sidecar
 
     metadata = build_default_etsy_metadata(src_image_path, dst_image_path, final_png)
-    metadata_bytes = (json.dumps(metadata, indent=2) + "\\n").encode("utf-8")
+    metadata_bytes = (json.dumps(metadata, indent=2) + "\n").encode("utf-8")
     upload_dropbox_file(dbx, src_sidecar, metadata_bytes, overwrite=False)
     LOG.info("Created Etsy sidecar from processed asset -> %s", src_sidecar)
     return src_sidecar
