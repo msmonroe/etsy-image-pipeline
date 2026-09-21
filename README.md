@@ -142,3 +142,57 @@ If your chosen model differs, edit `run_replicate_upscale()` in `pipeline.py`.
 ## Next phase
 
 Once this worker is stable, the next layer can create Etsy draft listings from structured metadata while keeping a human review step before publication.
+
+
+## Vector workflow
+
+The repository now has a second production branch for vector-friendly line art. The existing `pipeline.py` raster/Real-ESRGAN workflow is unchanged.
+
+```text
+Dropbox /Etsy/Approved/Vector
+        |
+        v
+vector_pipeline.py
+        |
+        +--> composite transparency onto white
+        +--> threshold to clean 1-bit line art
+        +--> Potrace -> genuine SVG paths
+        +--> reject embedded raster images / missing paths
+        +--> render SVG back to PNG with Inkscape
+        +--> compare render against cleaned source
+        +--> export SVG + PNG + PDF + EPS
+        |
+        +--> PASS -> /Etsy/Vectorized/{SVG,PNG,PDF,EPS}
+        |
+        +--> FAIL -> /Etsy/Needs-Review
+```
+
+Install the vector system dependencies on Ubuntu:
+
+```bash
+sudo apt update
+sudo apt install potrace inkscape ghostscript
+```
+
+Test one approved vector source:
+
+```bash
+python vector_pipeline.py --once --limit 1
+```
+
+Vector-specific optional environment settings:
+
+```dotenv
+DROPBOX_VECTOR_APPROVED_FOLDER=/Etsy/Approved/Vector
+DROPBOX_VECTORIZED_FOLDER=/Etsy/Vectorized
+VECTOR_PNG_SIZE=4500
+VECTOR_PNG_DPI=300
+VECTOR_THRESHOLD=180
+VECTOR_MAX_DIFFERENCE=0.08
+```
+
+`VECTOR_THRESHOLD` controls which source pixels become black vector geometry. Lower values preserve only darker marks; higher values retain lighter details. `VECTOR_MAX_DIFFERENCE` is the normalized visual QC tolerance between the cleaned source and a fresh render of the generated SVG.
+
+The SVG validator explicitly rejects SVG files containing `<image>` elements and requires real `<path>` geometry. This prevents a raster PNG wrapped in an SVG container from passing as a vector product.
+
+DXF is intentionally not generated yet. Detailed engraved line art can produce poor cutting-machine DXF files, so DXF should be added only after a separate cutter-oriented simplification/QC stage.
