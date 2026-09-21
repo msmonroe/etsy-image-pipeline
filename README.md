@@ -206,3 +206,53 @@ DXF is intentionally not generated yet. Detailed engraved line art can produce p
 
 The first end-to-end production test (`cat_head_bowtie_001.png`) completed successfully with 169 SVG paths and a normalized visual difference of 0.0184 against the cleaned source, below the default 0.0800 rejection threshold. SVG, transparent PNG, PDF, and EPS exports all completed successfully.
 
+
+
+## Etsy bundle workflow
+
+Completed vector assets can be packaged into buyer-facing ZIP files with `bundle_pipeline.py`.
+
+The bundler reads matching designs from:
+
+```text
+/Etsy/Vectorized/SVG
+/Etsy/Vectorized/PNG
+/Etsy/Vectorized/PDF
+/Etsy/Vectorized/EPS
+```
+
+and writes:
+
+```text
+/Etsy/Bundles/Individual
+/Etsy/Bundles/Collections
+```
+
+Each ZIP includes the applicable artwork plus `README.txt` and `MANIFEST.json`. The default safety ceiling is 19 MB per ZIP, leaving headroom below Etsy's 20 MB per-file limit. A collection is split into multiple ZIPs automatically. The run fails if more than five collection ZIPs would be required.
+
+Build the Samurai Cats & Ramen individual products and collection:
+
+```bash
+python bundle_pipeline.py --prefix samurai_ramen_ \
+  --collection-name samurai_cats_ramen_collection
+```
+
+To build only the collection ZIPs:
+
+```bash
+python bundle_pipeline.py --prefix samurai_ramen_ \
+  --collection-name samurai_cats_ramen_collection \
+  --no-individual
+```
+
+Optional settings:
+
+```dotenv
+DROPBOX_BUNDLES_FOLDER=/Etsy/Bundles
+BUNDLE_MAX_ZIP_MB=19
+BUNDLE_MAX_LISTING_FILES=5
+```
+
+Existing bundles are not overwritten unless `OVERWRITE_OUTPUT=true`.
+
+The detailed vector collection is intended for print, sublimation, DTF, stickers, posters, engraving, and digital design. It should not be advertised as general-purpose Cricut/Silhouette cut-ready artwork. DXF remains reserved for a future simplified cutter-specific workflow.
