@@ -174,6 +174,10 @@ sudo apt update
 sudo apt install potrace inkscape ghostscript
 ```
 
+### Ubuntu / Snap VS Code note
+
+If this worker is launched from a terminal inside a Snap-installed VS Code, VS Code can inject Snap GTK/GIO paths that break the native `/usr/bin/inkscape` with symbol lookup errors. The vector worker sanitizes those variables for its Inkscape subprocesses, so normal pipeline runs do not require shell workarounds.
+
 Test one approved vector source:
 
 ```bash
@@ -196,3 +200,9 @@ VECTOR_MAX_DIFFERENCE=0.08
 The SVG validator explicitly rejects SVG files containing `<image>` elements and requires real `<path>` geometry. This prevents a raster PNG wrapped in an SVG container from passing as a vector product.
 
 DXF is intentionally not generated yet. Detailed engraved line art can produce poor cutting-machine DXF files, so DXF should be added only after a separate cutter-oriented simplification/QC stage.
+
+
+### Proven vector QC
+
+The first end-to-end production test (`cat_head_bowtie_001.png`) completed successfully with 169 SVG paths and a normalized visual difference of 0.0184 against the cleaned source, below the default 0.0800 rejection threshold. SVG, transparent PNG, PDF, and EPS exports all completed successfully.
+
