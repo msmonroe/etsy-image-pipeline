@@ -562,12 +562,6 @@ def validate_output(
         min_alpha, _ = alpha.getextrema()
         output_has_transparency = min_alpha < 255
 
-    if width < cfg.min_output_width or height < cfg.min_output_height:
-        raise ValueError(
-            f"Upscaled image too small: {width}x{height}; "
-            f"minimum is {cfg.min_output_width}x{cfg.min_output_height}"
-        )
-
     expected_width = source_width * cfg.upscale_factor
     expected_height = source_height * cfg.upscale_factor
     if (
