@@ -21,7 +21,20 @@ Dropbox /Etsy/Upscaled
 
 The worker is intentionally conservative. It does **not** publish to Etsy. It only prepares production-ready image files.
 
-## 1. Clone
+
+## Typed declarative architecture
+
+The raster worker is intentionally split into **domain types**, **pipeline declaration**, and **side-effecting adapters**.
+
+- `pipeline_models.py` contains Pydantic models for configuration, image facts, Etsy metadata, per-asset state, and run summaries. Invalid configuration or malformed metadata fails at the boundary instead of leaking untyped dictionaries through the worker.
+- `pipeline_graph.py` contains the small generic graph executor.
+- `pipeline.py` declares the production graph as named steps: `download -> upscale -> normalize_png -> validate -> upload_master -> ensure_metadata -> listing_assets`.
+- `listing_images.py` uses a Pydantic-validated `ListingImageSpec`.
+
+The graph is deliberately lightweight rather than depending on a workflow framework. Dropbox and Replicate remain ordinary adapters, while the data crossing pipeline boundaries is validated. This keeps the worker easy to test and makes future steps explicit without turning the project into framework soup.
+
+Existing Etsy sidecars are validated before processing continues. New sidecars are created from the actual processed PNG, and IP review remains `pending` until explicitly approved.
+\n## 1. Clone
 
 ```bash
 git clone https://github.com/msmonroe/etsy-image-pipeline.git
