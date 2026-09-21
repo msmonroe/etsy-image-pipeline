@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import io
-from dataclasses import dataclass
 from typing import Iterable
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ListingImageSpec(BaseModel):
