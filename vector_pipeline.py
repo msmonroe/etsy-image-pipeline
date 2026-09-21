@@ -227,7 +227,7 @@ def process_file(dbx: dropbox.Dropbox, entry: dropbox.files.FileMetadata, cfg: C
         return True
 
 
-def run_once(limit: Optional[int] = None) -> int:
+def run_once(limit: Optional[int] = None, filename: Optional[str] = None) -> int:
     cfg = load_config()
     dbx = make_dropbox_client()
     ensure_folder(dbx, cfg.approved_folder)
@@ -235,10 +235,15 @@ def run_once(limit: Optional[int] = None) -> int:
     for sub in ("SVG", "PNG", "PDF", "EPS"):
         ensure_folder(dbx, f"{cfg.vectorized_folder.rstrip('/')}/{sub}")
 
-    processed = failures = 0
+    processed = failures = attempts = 0
+    matched_file = False
     for entry in list_pngs(dbx, cfg.approved_folder):
-        if limit is not None and processed >= limit:
+        if filename is not None and entry.name.casefold() != filename.casefold():
+            continue
+        matched_file = True
+        if limit is not None and attempts >= limit:
             break
+        attempts += 1
         try:
             if process_file(dbx, entry, cfg):
                 processed += 1
@@ -250,7 +255,10 @@ def run_once(limit: Optional[int] = None) -> int:
                     copy_to_review(dbx, entry.path_display, cfg.needs_review_folder)
                 except Exception:
                     LOG.exception("Could not copy to Needs-Review")
-    LOG.info("Vector run complete. processed=%s failures=%s", processed, failures)
+    if filename is not None and not matched_file:
+        LOG.error("Requested file not found in %s: %s", cfg.approved_folder, filename)
+        return 1
+    LOG.info("Vector run complete. processed=%s failures=%s attempts=%s", processed, failures, attempts)
     return 1 if failures else 0
 
 
@@ -258,13 +266,14 @@ def main() -> int:
     p = argparse.ArgumentParser(description="Create genuine vector Etsy assets from approved line-art PNGs")
     p.add_argument("--once", action="store_true")
     p.add_argument("--limit", type=int)
+    p.add_argument("--file", dest="filename", help="Process only this PNG filename from the approved vector folder")
     args = p.parse_args()
     logging.basicConfig(
         level=getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     try:
-        return run_once(args.limit)
+        return run_once(args.limit, args.filename)
     except Exception:
         LOG.exception("Fatal vector pipeline error")
         return 1
