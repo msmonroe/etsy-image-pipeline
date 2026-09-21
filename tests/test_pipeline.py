@@ -98,6 +98,19 @@ def test_validate_output_accepts_exact_4x_dimensions(png_bytes):
     assert pipeline.validate_output(source, output, cfg) == (40, 48, False)
 
 
+def test_validate_output_accepts_exact_4x_vertical_below_square_minimum(png_bytes):
+    source = png_bytes((1122, 1402), transparent=False)
+    output = png_bytes((4488, 5608), transparent=False)
+    cfg = make_config(
+        upscale_factor=4,
+        min_output_width=4500,
+        min_output_height=4500,
+        dimension_tolerance_px=0,
+    )
+
+    assert pipeline.validate_output(source, output, cfg) == (4488, 5608, False)
+
+
 def test_validate_output_rejects_wrong_dimensions(png_bytes):
     source = png_bytes((10, 10), transparent=False)
     output = png_bytes((39, 40), transparent=False)
@@ -167,3 +180,74 @@ def test_oom_uses_tiled_fallback(monkeypatch, png_bytes):
     assert calls[1][0] == "xinntao/realesrgan"
     assert calls[1][1]["tile"] == 400
     assert calls[1][1]["version"] == "General - v3"
+
+
+def test_build_default_etsy_metadata_uses_actual_output_properties(png_bytes):
+    final_png = pipeline.restore_alpha(
+        png_bytes((10, 10), transparent=False),
+        png_bytes((40, 40), transparent=False),
+    )
+
+    metadata = pipeline.build_default_etsy_metadata(
+        "/Etsy/Approved/samurai_cat_ramen_v2.png",
+        "/Etsy/Upscaled/samurai_cat_ramen_v2.png",
+        final_png,
+    )
+
+    assert metadata["image"]["width_px"] == 40
+    assert metadata["image"]["height_px"] == 40
+    assert metadata["image"]["dpi"] == 300
+    assert metadata["image"]["transparent"] is False
+    assert metadata["image"]["format"] == "PNG"
+    assert metadata["ip_review"]["status"] == "pending"
+    assert metadata["etsy"]["title"] == ""
+    assert metadata["etsy"]["tags"] == []
+    assert metadata["digital_files"][0]["dropbox_path"] == (
+        "/Etsy/Upscaled/samurai_cat_ramen_v2.png"
+    )
+
+
+def test_ensure_etsy_sidecar_creates_missing_sidecar(monkeypatch, png_bytes):
+    uploads = []
+    monkeypatch.setattr(pipeline, "dropbox_file_exists", lambda *args: False)
+    monkeypatch.setattr(
+        pipeline,
+        "upload_dropbox_file",
+        lambda dbx, path, data, overwrite: uploads.append((path, data, overwrite)),
+    )
+
+    path = pipeline.ensure_etsy_sidecar(
+        object(),
+        "/Etsy/Approved/samurai_cat_ramen_v2.png",
+        "/Etsy/Upscaled/samurai_cat_ramen_v2.png",
+        png_bytes((40, 40), transparent=False),
+    )
+
+    assert path == "/Etsy/Approved/samurai_cat_ramen_v2.etsy.json"
+    assert len(uploads) == 1
+    assert uploads[0][0] == path
+    assert uploads[0][2] is False
+    metadata = __import__("json").loads(uploads[0][1])
+    assert metadata["image"]["width_px"] == 40
+    assert metadata["image"]["height_px"] == 40
+    assert metadata["image"]["transparent"] is False
+
+
+def test_ensure_etsy_sidecar_preserves_existing_sidecar(monkeypatch, png_bytes):
+    uploads = []
+    monkeypatch.setattr(pipeline, "dropbox_file_exists", lambda *args: True)
+    monkeypatch.setattr(
+        pipeline,
+        "upload_dropbox_file",
+        lambda *args, **kwargs: uploads.append((args, kwargs)),
+    )
+
+    path = pipeline.ensure_etsy_sidecar(
+        object(),
+        "/Etsy/Approved/existing.png",
+        "/Etsy/Upscaled/existing.png",
+        png_bytes((40, 40), transparent=False),
+    )
+
+    assert path == "/Etsy/Approved/existing.etsy.json"
+    assert uploads == []
