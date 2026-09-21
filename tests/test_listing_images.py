@@ -3,8 +3,10 @@ from __future__ import annotations
 import io
 
 from PIL import Image
+import pytest
+from pydantic import ValidationError
 
-from listing_images import generate_listing_images
+from listing_images import ListingImageSpec, generate_listing_images
 
 
 def test_generate_listing_images_returns_expected_assets(png_bytes):
@@ -28,3 +30,8 @@ def test_generate_listing_images_returns_expected_assets(png_bytes):
         with Image.open(io.BytesIO(payload)) as image:
             assert image.format == "JPEG"
             assert image.size == (600, 500)
+
+
+def test_listing_spec_is_pydantic_validated():
+    with pytest.raises(ValidationError):
+        ListingImageSpec(width=0, height=500, jpeg_quality=80)

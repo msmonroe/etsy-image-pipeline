@@ -1,17 +1,17 @@
 from __future__ import annotations
 
 import io
-from dataclasses import dataclass
 from typing import Iterable
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from pydantic import BaseModel, ConfigDict, Field
 
 
-@dataclass(frozen=True)
-class ListingImageSpec:
-    width: int = 2400
-    height: int = 2000
-    jpeg_quality: int = 90
+class ListingImageSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    width: int = Field(default=2400, gt=0)
+    height: int = Field(default=2000, gt=0)
+    jpeg_quality: int = Field(default=90, ge=1, le=100)
 
 
 def _font(size: int, bold: bool = False) -> ImageFont.ImageFont:
