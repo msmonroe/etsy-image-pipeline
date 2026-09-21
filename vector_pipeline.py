@@ -147,19 +147,32 @@ def validate_svg(svg: Path) -> tuple[int, int]:
     return len(paths), commands
 
 
+def inkscape_env() -> dict[str, str]:
+    """Sanitize Snap/VS Code GTK variables before launching native Inkscape."""
+    env = os.environ.copy()
+    for name in (
+        "GTK_PATH", "GTK_EXE_PREFIX", "GSETTINGS_SCHEMA_DIR",
+        "GTK_IM_MODULE_FILE", "GIO_MODULE_DIR", "LOCPATH",
+    ):
+        env.pop(name, None)
+    return env
+
+
 def render_svg(svg: Path, png: Path, size: int, dpi: int) -> None:
     if not shutil.which("inkscape"):
         raise RuntimeError("inkscape is required for SVG rendering/export")
     subprocess.run(
         ["inkscape", str(svg), "--export-type=png", f"--export-filename={png}",
          f"--export-width={size}", f"--export-height={size}", f"--export-dpi={dpi}"],
-        check=True, capture_output=True, text=True,
+        check=True, capture_output=True, text=True, env=inkscape_env(),
     )
 
 
 def visual_difference(source_l: Image.Image, rendered_path: Path) -> float:
     with Image.open(rendered_path) as rendered:
-        r = ImageOps.grayscale(rendered.convert("RGBA"))
+        rgba = rendered.convert("RGBA")
+        white = Image.new("RGBA", rgba.size, "white")
+        r = ImageOps.grayscale(Image.alpha_composite(white, rgba))
         s = source_l.resize(r.size, Image.Resampling.LANCZOS)
         diff = ImageChops.difference(s, r)
         return ImageStat.Stat(diff).mean[0] / 255.0
@@ -168,7 +181,7 @@ def visual_difference(source_l: Image.Image, rendered_path: Path) -> float:
 def export_vector(svg: Path, out: Path, kind: str) -> None:
     subprocess.run(
         ["inkscape", str(svg), f"--export-type={kind}", f"--export-filename={out}"],
-        check=True, capture_output=True, text=True,
+        check=True, capture_output=True, text=True, env=inkscape_env(),
     )
 
 
