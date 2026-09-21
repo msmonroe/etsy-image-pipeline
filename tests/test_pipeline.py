@@ -98,6 +98,19 @@ def test_validate_output_accepts_exact_4x_dimensions(png_bytes):
     assert pipeline.validate_output(source, output, cfg) == (40, 48, False)
 
 
+def test_validate_output_accepts_exact_4x_vertical_below_square_minimum(png_bytes):
+    source = png_bytes((1122, 1402), transparent=False)
+    output = png_bytes((4488, 5608), transparent=False)
+    cfg = make_config(
+        upscale_factor=4,
+        min_output_width=4500,
+        min_output_height=4500,
+        dimension_tolerance_px=0,
+    )
+
+    assert pipeline.validate_output(source, output, cfg) == (4488, 5608, False)
+
+
 def test_validate_output_rejects_wrong_dimensions(png_bytes):
     source = png_bytes((10, 10), transparent=False)
     output = png_bytes((39, 40), transparent=False)
