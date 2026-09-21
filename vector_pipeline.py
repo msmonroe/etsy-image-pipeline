@@ -130,7 +130,7 @@ def trace_svg(bitmap: Path, svg: Path) -> None:
     if not shutil.which("potrace"):
         raise RuntimeError("potrace is required: sudo apt install potrace")
     subprocess.run(
-        ["potrace", str(bitmap), "-s", "-o", str(svg), "--tight", "--opttolerance", "0.2"],
+        ["potrace", str(bitmap), "-s", "-o", str(svg), "--opttolerance", "0.2"],
         check=True, capture_output=True, text=True,
     )
 
