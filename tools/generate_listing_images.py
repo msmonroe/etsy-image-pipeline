@@ -145,12 +145,38 @@ def main() -> int:
     ensure_folder(dbx, output_folder)
 
     source_png = download(dbx, image_path)
+
+    specs_png = None
+    delivery_path = None
+    for item in metadata.get("digital_files", []):
+        candidate = item.get("dropbox_path")
+        if (
+            item.get("filename") == image.name
+            and isinstance(candidate, str)
+            and candidate
+            and exists(dbx, candidate)
+        ):
+            delivery_path = candidate
+            break
+
+    if delivery_path is None:
+        delivery_root = os.getenv(
+            "DROPBOX_DELIVERY_FOLDER", "/Etsy/Delivery"
+        ).rstrip("/")
+        candidate = f"{delivery_root}/{image.stem}_etsy.png"
+        if exists(dbx, candidate):
+            delivery_path = candidate
+
+    if delivery_path is not None:
+        specs_png = download(dbx, delivery_path)
+        print(f"Using Etsy delivery file for specs: {delivery_path}")
     generated = generate_listing_images(
         source_png,
         digital_files,
         width=width,
         height=height,
         jpeg_quality=quality,
+        specs_png=specs_png,
     )
 
     labels = {
