@@ -287,6 +287,7 @@ def generate_listing_assets(
     dst_image_path: str,
     final_png: bytes,
     cfg: Config,
+    specs_png: bytes | None = None,
 ) -> None:
     src_image = PurePosixPath(src_image_path)
     src_sidecar = str(src_image.with_name(f"{src_image.stem}.etsy.json"))
@@ -320,6 +321,7 @@ def generate_listing_assets(
         width=cfg.listing_image_width,
         height=cfg.listing_image_height,
         jpeg_quality=cfg.listing_image_jpeg_quality,
+        specs_png=specs_png,
     )
 
     labels = {
@@ -622,8 +624,9 @@ def process_file(
 
     upload_dropbox_file(dbx, dst_path, final_png, overwrite=cfg.overwrite_output)
 
+    delivery_png: bytes | None = None
     if cfg.generate_delivery_file:
-        generate_delivery_asset(
+        _, delivery_png = generate_delivery_asset(
             dbx,
             src_path,
             dst_path,
@@ -638,6 +641,7 @@ def process_file(
             dst_path,
             final_png,
             cfg,
+            specs_png=delivery_png,
         )
     else:
         copy_sidecar_to_output(
