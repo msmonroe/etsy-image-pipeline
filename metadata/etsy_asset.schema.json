@@ -26,15 +26,29 @@
     },
     "role": {
       "type": "string",
-      "enum": ["master", "bundle_member", "preview", "mockup", "download"]
+      "enum": [
+        "master",
+        "bundle_member",
+        "preview",
+        "mockup",
+        "download"
+      ]
     },
     "ip_review": {
       "type": "object",
-      "required": ["status", "original_art_only", "notes"],
+      "required": [
+        "status",
+        "original_art_only",
+        "notes"
+      ],
       "properties": {
         "status": {
           "type": "string",
-          "enum": ["pending", "approved", "needs_review"]
+          "enum": [
+            "pending",
+            "approved",
+            "needs_review"
+          ]
         },
         "original_art_only": {
           "type": "boolean"
@@ -48,11 +62,30 @@
     "image": {
       "type": "object",
       "properties": {
-        "target_width_px": {"type": ["integer", "null"]},
-        "target_height_px": {"type": ["integer", "null"]},
-        "dpi": {"type": "integer", "default": 300},
-        "transparent": {"type": "boolean", "default": true},
-        "format": {"type": "string", "default": "PNG"}
+        "target_width_px": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "target_height_px": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "dpi": {
+          "type": "integer",
+          "default": 300
+        },
+        "transparent": {
+          "type": "boolean",
+          "default": true
+        },
+        "format": {
+          "type": "string",
+          "default": "PNG"
+        }
       },
       "additionalProperties": false
     },
@@ -61,11 +94,26 @@
       "description": "Images shown on the Etsy listing page. Filenames are relative to the sidecar unless absolute.",
       "items": {
         "type": "object",
-        "required": ["filename"],
+        "required": [
+          "filename"
+        ],
         "properties": {
-          "filename": {"type": "string"},
-          "rank": {"type": ["integer", "null"], "minimum": 1},
-          "alt_text": {"type": ["string", "null"]}
+          "filename": {
+            "type": "string"
+          },
+          "rank": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "alt_text": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
         },
         "additionalProperties": false
       }
@@ -75,11 +123,52 @@
       "description": "Files delivered to the buyer. Filenames are relative to the sidecar unless absolute.",
       "items": {
         "type": "object",
-        "required": ["filename"],
+        "required": [
+          "filename"
+        ],
         "properties": {
-          "filename": {"type": "string"},
-          "dropbox_path": {"type": ["string", "null"]},
-          "display_name": {"type": ["string", "null"]}
+          "filename": {
+            "type": "string"
+          },
+          "dropbox_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "master_dropbox_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "file_size_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "width_px": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "height_px": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          }
         },
         "additionalProperties": false
       }
@@ -98,28 +187,72 @@
         "tags"
       ],
       "properties": {
-        "title": {"type": "string"},
-        "description": {"type": "string"},
-        "price": {"type": ["number", "null"]},
-        "quantity": {"type": "integer", "minimum": 1},
-        "who_made": {"type": "string", "default": "i_did"},
-        "when_made": {"type": "string", "default": "2020_2026"},
-        "taxonomy_id": {"type": ["integer", "null"]},
-        "type": {"type": "string", "const": "download"},
+        "title": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "price": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "quantity": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "who_made": {
+          "type": "string",
+          "default": "i_did"
+        },
+        "when_made": {
+          "type": "string",
+          "default": "2020_2026"
+        },
+        "taxonomy_id": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "type": {
+          "type": "string",
+          "const": "download"
+        },
         "tags": {
           "type": "array",
-          "items": {"type": "string"},
+          "items": {
+            "type": "string"
+          },
           "maxItems": 13
         },
         "materials": {
           "type": "array",
-          "items": {"type": "string"}
+          "items": {
+            "type": "string"
+          }
         },
-        "sku": {"type": ["string", "null"]},
-        "listing_id": {"type": ["integer", "null"]},
+        "sku": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "listing_id": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "state": {
           "type": "string",
-          "enum": ["metadata_only", "draft", "active"],
+          "enum": [
+            "metadata_only",
+            "draft",
+            "active"
+          ],
           "default": "metadata_only"
         }
       },
