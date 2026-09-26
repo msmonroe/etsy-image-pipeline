@@ -142,12 +142,30 @@ def detail_image(art: Image.Image, spec: ListingImageSpec) -> bytes:
     return _jpeg_bytes(canvas, spec.jpeg_quality)
 
 
+def _spec_lines(
+    pixel_size: tuple[int, int],
+    dpi: int,
+    transparent: bool,
+    file_size_bytes: int | None = None,
+) -> list[str]:
+    lines = [
+        f"{pixel_size[0]} × {pixel_size[1]} pixels",
+        f"{dpi} DPI metadata",
+        "Transparent background" if transparent else "Opaque background",
+    ]
+    if file_size_bytes is not None:
+        lines.append(f"{file_size_bytes / (1024 * 1024):.2f} MiB download")
+    lines.append("No physical item will be shipped")
+    return lines
+
+
 def specs_image(
     art: Image.Image,
     spec: ListingImageSpec,
     pixel_size: tuple[int, int],
     dpi: int,
     transparent: bool,
+    file_size_bytes: int | None = None,
 ) -> bytes:
     canvas = Image.new("RGBA", (spec.width, spec.height), (250, 250, 247, 255))
     draw = ImageDraw.Draw(canvas)
@@ -206,12 +224,12 @@ def specs_image(
 
     y += max(50, spec.height // 28)
 
-    bullets = [
-        f"{pixel_size[0]} × {pixel_size[1]} pixels",
-        f"{dpi} DPI metadata",
-        "Transparent background" if transparent else "Opaque background",
-        "No physical item will be shipped",
-    ]
+    bullets = _spec_lines(
+        pixel_size,
+        dpi,
+        transparent,
+        file_size_bytes=file_size_bytes,
+    )
     bullet_gap = max(34, spec.height // 42)
     for bullet in bullets:
         lines = _wrap(draw, bullet, body_font, right_width)
@@ -227,7 +245,7 @@ def specs_image(
         y += bullet_gap
 
     footer = (
-        "Production file shown for reference. "
+        "Buyer delivery file specifications. "
         "Listing preview is flattened to JPEG."
     )
     footer_lines = _wrap(draw, footer, small_font, right_width)
@@ -293,6 +311,7 @@ def generate_listing_images(
     width: int = 2400,
     height: int = 2000,
     jpeg_quality: int = 90,
+    specs_png: bytes | None = None,
 ) -> dict[str, bytes]:
     spec = ListingImageSpec(
         width=width,
@@ -302,18 +321,40 @@ def generate_listing_images(
 
     with Image.open(io.BytesIO(source_png)) as image:
         art = image.convert("RGBA")
-        pixel_size = art.size
-        dpi_info = image.info.get("dpi")
-        dpi = int(round(dpi_info[0])) if dpi_info else 300
-        transparent = art.getchannel("A").getextrema()[0] < 255
 
-        return {
-            "01_hero.jpg": hero_image(art, spec),
-            "02_detail.jpg": detail_image(art, spec),
-            "03_specs.jpg": specs_image(
-                art, spec, pixel_size, dpi, transparent
-            ),
-            "04_included.jpg": included_image(
-                art, spec, digital_filenames
-            ),
-        }
+    specs_art = art
+    specs_pixel_size = art.size
+    specs_dpi = 300
+    specs_transparent = art.getchannel("A").getextrema()[0] < 255
+    specs_file_size: int | None = None
+
+    if specs_png is not None:
+        with Image.open(io.BytesIO(specs_png)) as delivery_image:
+            specs_art = delivery_image.convert("RGBA")
+            specs_pixel_size = specs_art.size
+            dpi_info = delivery_image.info.get("dpi")
+            specs_dpi = int(round(dpi_info[0])) if dpi_info else 300
+            specs_transparent = (
+                specs_art.getchannel("A").getextrema()[0] < 255
+            )
+        specs_file_size = len(specs_png)
+    else:
+        with Image.open(io.BytesIO(source_png)) as source_image:
+            dpi_info = source_image.info.get("dpi")
+            specs_dpi = int(round(dpi_info[0])) if dpi_info else 300
+
+    return {
+        "01_hero.jpg": hero_image(art, spec),
+        "02_detail.jpg": detail_image(art, spec),
+        "03_specs.jpg": specs_image(
+            specs_art,
+            spec,
+            specs_pixel_size,
+            specs_dpi,
+            specs_transparent,
+            file_size_bytes=specs_file_size,
+        ),
+        "04_included.jpg": included_image(
+            art, spec, digital_filenames
+        ),
+    }
