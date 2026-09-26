@@ -133,6 +133,7 @@ Default folders:
 ```text
 DROPBOX_APPROVED_FOLDER=/Etsy/Approved
 DROPBOX_UPSCALED_FOLDER=/Etsy/Upscaled
+DROPBOX_DELIVERY_FOLDER=/Etsy/Delivery
 DROPBOX_NEEDS_REVIEW_FOLDER=/Etsy/Needs-Review
 ```
 
@@ -562,6 +563,11 @@ The specs layout deliberately constrains artwork and typography to separate colu
 Default configuration:
 
 ```text
+GENERATE_DELIVERY_FILE=true
+DROPBOX_DELIVERY_FOLDER=/Etsy/Delivery
+ETSY_MAX_FILE_MB=19
+ETSY_DELIVERY_MIN_DIMENSION=4000
+
 GENERATE_LISTING_IMAGES=true
 DROPBOX_LISTING_IMAGES_FOLDER=/Etsy/Listing-Images
 ETSY_LISTING_IMAGE_WIDTH=2400
@@ -666,6 +672,10 @@ dimension/transparency validation
 /Etsy/Upscaled/image.png
 /Etsy/Upscaled/image.etsy.json
         ->
+Etsy-safe delivery PNG under configured file-size limit
+        ->
+/Etsy/Delivery/image_etsy.png
+        ->
 4 Pillow-generated listing JPEGs
         ->
 /Etsy/Listing-Images/<listing_key>/
@@ -728,3 +738,68 @@ human review before any publication
 ```
 
 Automatic Etsy publication is not enabled.
+
+
+## Etsy delivery file-size handling
+
+Etsy limits each uploaded digital-download file to 20 MB. The pipeline keeps the full-resolution master untouched in:
+
+```text
+/Etsy/Upscaled/
+```
+
+and creates a separate Etsy-ready delivery copy in:
+
+```text
+/Etsy/Delivery/
+```
+
+Default configuration:
+
+```text
+GENERATE_DELIVERY_FILE=true
+DROPBOX_DELIVERY_FOLDER=/Etsy/Delivery
+ETSY_MAX_FILE_MB=19
+ETSY_DELIVERY_MIN_DIMENSION=4000
+```
+
+The 19 MiB target intentionally leaves headroom below Etsy's 20 MB upload limit.
+
+Delivery generation works in two stages:
+
+```text
+full-resolution master
+        ->
+maximum lossless PNG compression
+        ->
+if still too large, resize downward in small 3% steps
+        ->
+stop as soon as the file fits under the configured limit
+```
+
+Transparency, aspect ratio, PNG format, and 300 DPI metadata are preserved. The production master is never replaced by the smaller delivery copy.
+
+If the delivery image would need to shrink below `ETSY_DELIVERY_MIN_DIMENSION`, generation fails instead of silently degrading the file further.
+
+The matching sidecar records both the delivery path and production-master path, along with delivery byte size and dimensions.
+
+For a newly processed image this happens automatically. To create a delivery file from an image that is already in `/Etsy/Upscaled` without calling Replicate again:
+
+```bash
+python tools/generate_etsy_delivery.py \
+  samurai_cat_halloween_witch_black_master.png
+```
+
+To deliberately replace an existing delivery copy:
+
+```bash
+python tools/generate_etsy_delivery.py \
+  samurai_cat_halloween_witch_black_master.png \
+  --force
+```
+
+The generated Etsy buyer file is named with an `_etsy.png` suffix, for example:
+
+```text
+/Etsy/Delivery/samurai_cat_halloween_witch_black_master_etsy.png
+```
