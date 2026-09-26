@@ -560,6 +560,8 @@ The current set is:
 
 The specs layout deliberately constrains artwork and typography to separate columns so tall artwork cannot overlap the file-information text.
 
+When an Etsy delivery PNG exists, the specs card now uses the **buyer delivery file** for its pixel dimensions, DPI, transparency status, and file size. This prevents the listing image from advertising the larger production-master dimensions after Etsy size-limit optimization. Hero, detail, and included-file previews still use the full-resolution master artwork.
+
 Default configuration:
 
 ```text
@@ -824,7 +826,9 @@ The delivery tests verify:
 - aspect ratio is preserved,
 - the minimum-dimension safety floor is enforced,
 - invalid delivery settings are rejected,
-- `tools/generate_etsy_delivery.py --help` can import repository modules correctly when launched as a script.
+- `tools/generate_etsy_delivery.py --help` can import repository modules correctly when launched as a script,
+- listing specs use Etsy delivery-file dimensions and byte size when a delivery copy is available,
+- listing specs fall back to master dimensions when no delivery copy is supplied.
 
 GitHub Actions also runs the same test suite on pushes and pull requests for `main` and `replicate-smoke-test` via:
 
