@@ -18,6 +18,7 @@ import requests
 from dotenv import load_dotenv
 from PIL import Image
 
+from etsy_delivery import create_etsy_delivery_png
 from listing_images import generate_listing_images
 
 
@@ -32,7 +33,11 @@ class Config:
     upscaled_folder: str
     needs_review_folder: str
     listing_images_folder: str
+    delivery_folder: str
     generate_listing_images: bool
+    generate_delivery_file: bool
+    etsy_max_file_mb: float
+    etsy_delivery_min_dimension: int
     listing_image_width: int
     listing_image_height: int
     listing_image_jpeg_quality: int
@@ -81,7 +86,13 @@ def load_config() -> Config:
         upscaled_folder=os.getenv("DROPBOX_UPSCALED_FOLDER", "/Etsy/Upscaled"),
         needs_review_folder=os.getenv("DROPBOX_NEEDS_REVIEW_FOLDER", "/Etsy/Needs-Review"),
         listing_images_folder=os.getenv("DROPBOX_LISTING_IMAGES_FOLDER", "/Etsy/Listing-Images"),
+        delivery_folder=os.getenv("DROPBOX_DELIVERY_FOLDER", "/Etsy/Delivery"),
         generate_listing_images=env_bool("GENERATE_LISTING_IMAGES", True),
+        generate_delivery_file=env_bool("GENERATE_DELIVERY_FILE", True),
+        etsy_max_file_mb=float(os.getenv("ETSY_MAX_FILE_MB", "19")),
+        etsy_delivery_min_dimension=int(
+            os.getenv("ETSY_DELIVERY_MIN_DIMENSION", "4000")
+        ),
         listing_image_width=int(os.getenv("ETSY_LISTING_IMAGE_WIDTH", "2400")),
         listing_image_height=int(os.getenv("ETSY_LISTING_IMAGE_HEIGHT", "2000")),
         listing_image_jpeg_quality=int(os.getenv("ETSY_LISTING_IMAGE_JPEG_QUALITY", "90")),
@@ -203,6 +214,73 @@ def copy_sidecar_to_output(
     LOG.info("Copied Etsy sidecar -> %s", dst_sidecar)
 
 
+def generate_delivery_asset(
+    dbx: dropbox.Dropbox,
+    src_image_path: str,
+    master_path: str,
+    final_png: bytes,
+    cfg: Config,
+) -> tuple[str, bytes]:
+    src_image = PurePosixPath(src_image_path)
+    delivery_path = (
+        f"{cfg.delivery_folder.rstrip('/')}/{src_image.stem}_etsy.png"
+    )
+    max_bytes = int(cfg.etsy_max_file_mb * 1024 * 1024)
+
+    result = create_etsy_delivery_png(
+        final_png,
+        max_file_bytes=max_bytes,
+        min_dimension=cfg.etsy_delivery_min_dimension,
+        dpi=300,
+    )
+
+    upload_dropbox_file(
+        dbx,
+        delivery_path,
+        result.png_bytes,
+        overwrite=cfg.overwrite_output,
+    )
+    LOG.info(
+        "Wrote Etsy delivery file: %s (%sx%s, %.2f MiB)",
+        delivery_path,
+        result.width,
+        result.height,
+        result.size_bytes / (1024 * 1024),
+    )
+
+    src_sidecar = str(
+        src_image.with_name(f"{src_image.stem}.etsy.json")
+    )
+    if dropbox_file_exists(dbx, src_sidecar):
+        metadata = json.loads(
+            download_dropbox_file(dbx, src_sidecar).decode("utf-8")
+        )
+        for item in metadata.get("digital_files", []):
+            if item.get("filename") == src_image.name:
+                item["dropbox_path"] = delivery_path
+                item["master_dropbox_path"] = master_path
+                item["file_size_bytes"] = result.size_bytes
+                item["width_px"] = result.width
+                item["height_px"] = result.height
+
+        metadata_bytes = (
+            json.dumps(metadata, indent=2) + "\n"
+        ).encode("utf-8")
+        upload_dropbox_file(
+            dbx, src_sidecar, metadata_bytes, overwrite=True
+        )
+
+        dst_sidecar = (
+            f"{cfg.upscaled_folder.rstrip('/')}/"
+            f"{src_image.stem}.etsy.json"
+        )
+        upload_dropbox_file(
+            dbx, dst_sidecar, metadata_bytes, overwrite=True
+        )
+
+    return delivery_path, result.png_bytes
+
+
 def generate_listing_assets(
     dbx: dropbox.Dropbox,
     src_image_path: str,
@@ -278,7 +356,9 @@ def generate_listing_assets(
     metadata["listing_images"] = listing_entries
     for item in metadata.get("digital_files", []):
         if item.get("filename") == src_image.name:
-            item["dropbox_path"] = dst_image_path
+            item.setdefault("master_dropbox_path", dst_image_path)
+            if not item.get("dropbox_path"):
+                item["dropbox_path"] = dst_image_path
 
     metadata_bytes = (json.dumps(metadata, indent=2) + "\n").encode("utf-8")
     upload_dropbox_file(dbx, src_sidecar, metadata_bytes, overwrite=True)
@@ -541,6 +621,16 @@ def process_file(
     width, height, has_alpha = validate_output(source, final_png, cfg)
 
     upload_dropbox_file(dbx, dst_path, final_png, overwrite=cfg.overwrite_output)
+
+    if cfg.generate_delivery_file:
+        generate_delivery_asset(
+            dbx,
+            src_path,
+            dst_path,
+            final_png,
+            cfg,
+        )
+
     if cfg.generate_listing_images:
         generate_listing_assets(
             dbx,
@@ -573,6 +663,8 @@ def run_once(limit: Optional[int] = None, only_file: Optional[str] = None) -> in
 
     ensure_dropbox_folder(dbx, cfg.approved_folder)
     ensure_dropbox_folder(dbx, cfg.upscaled_folder)
+    if cfg.generate_delivery_file:
+        ensure_dropbox_folder(dbx, cfg.delivery_folder)
     if cfg.generate_listing_images:
         ensure_dropbox_folder(dbx, cfg.listing_images_folder)
     if cfg.copy_failures_to_review:
