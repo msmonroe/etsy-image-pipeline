@@ -803,3 +803,31 @@ The generated Etsy buyer file is named with an `_etsy.png` suffix, for example:
 ```text
 /Etsy/Delivery/samurai_cat_halloween_witch_black_master_etsy.png
 ```
+
+
+## Tests
+
+Unit tests cover the Etsy delivery optimizer and the delivery CLI import path.
+
+Run locally from the repository root:
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+The delivery tests verify:
+
+- files that already fit are not resized,
+- PNG transparency is preserved,
+- 300 DPI metadata is preserved,
+- oversized PNGs are reduced until they fit the configured byte limit,
+- aspect ratio is preserved,
+- the minimum-dimension safety floor is enforced,
+- invalid delivery settings are rejected,
+- `tools/generate_etsy_delivery.py --help` can import repository modules correctly when launched as a script.
+
+GitHub Actions also runs the same test suite on pushes and pull requests for `main` and `replicate-smoke-test` via:
+
+```text
+.github/workflows/tests.yml
+```
