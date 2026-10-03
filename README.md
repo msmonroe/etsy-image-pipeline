@@ -256,3 +256,20 @@ BUNDLE_MAX_LISTING_FILES=5
 Existing bundles are not overwritten unless `OVERWRITE_OUTPUT=true`.
 
 The detailed vector collection is intended for print, sublimation, DTF, stickers, posters, engraving, and digital design. It should not be advertised as general-purpose Cricut/Silhouette cut-ready artwork. DXF remains reserved for a future simplified cutter-specific workflow.
+
+
+## Safe product-specific exports and Etsy draft preparation
+
+New modules: `production_workflow.py` and `etsy_drafts.py`. These are opt-in helpers; the existing scheduled Dropbox worker is unchanged until they are explicitly integrated into the production orchestration.
+
+- Plan output by product: `clipart` 4500x4500, `sticker` 3000x3000, `shirt` 4500x5400, `wall_3x4` 3600x4800. All PNG exports carry 300 PPI metadata.
+- `plan_export(source_size, product)` skips unnecessary enlargement. When enlargement is needed, it returns a scale for the existing upscaler. Run image QC before `export_png`; a resize is not a substitute for genuine detail.
+- Keep colorful illustration assets separate from cutting designs. `validate_cut_design` requires simplified, closed, non-overlapping paths before advertising cut-ready SVG/DXF. The current vector worker does **not** produce DXF automatically.
+- `validate_downloads` checks Etsy's five-file and 20,000,000-byte per-file ceilings before a network call. Bundle archives conservatively (the existing bundler defaults to 19 MiB, which is larger than 19 decimal MB; keep actual Etsy payloads below 20,000,000 bytes).
+- `EtsyDraftClient.create_draft(metadata, images, downloads)` creates a draft and uploads separate JPEG previews and digital download files. It never publishes. Validate titles, descriptions, formats, artwork rights, Etsy category and current API field requirements during human review.
+- The draft client expects an existing Etsy OAuth access token with `listings_w` and `ETSY_API_KEY` / `ETSY_SHOP_ID`. OAuth authorization and refresh-token management must be configured separately before unattended operation. Never commit tokens.
+- Network failures can leave a partial draft. Record the returned listing ID and reconcile uploads before retrying; do not blindly recreate a listing.
+
+Run tests: `python -m pytest`. GitHub Actions runs the suite on pushes and pull requests.
+
+**Money boundary:** no API activation method is provided. A person reviews each Etsy draft and publishes it manually, accepting any listing fee at that point.
