@@ -20,6 +20,7 @@ from PIL import Image
 
 from listing_images import generate_listing_images
 from listing_copy import GREEBLE_NAME, metadata_for, listing_text
+from etsy_png_optimizer import optimize_etsy_png
 
 
 load_dotenv()
@@ -547,14 +548,19 @@ def process_file(
     upscaled_raw = run_replicate_upscale(source, cfg)
     final_png = restore_alpha(source, upscaled_raw)
     width, height, has_alpha = validate_output(source, final_png, cfg)
+    etsy_png, etsy_info = optimize_etsy_png(final_png)
+    etsy_path = f"{cfg.upscaled_folder.rstrip('/')}/{PurePosixPath(entry.name).stem}_etsy.png"
 
     upload_dropbox_file(dbx, dst_path, final_png, overwrite=cfg.overwrite_output)
+    upload_dropbox_file(dbx, etsy_path, etsy_png, overwrite=True)
+    LOG.info("Etsy-safe PNG: %s (%s bytes, %s)", etsy_path,
+             etsy_info["bytes"], etsy_info["etsy_dimensions"])
     if cfg.generate_listing_images:
         generate_listing_assets(
             dbx,
             src_path,
-            dst_path,
-            final_png,
+            etsy_path,
+            etsy_png,
             cfg,
         )
     else:
@@ -576,8 +582,11 @@ def process_file(
 
 
 def run_once(limit: Optional[int] = None, only_file: Optional[str] = None,
-             listing_images_only: bool = False) -> int:
-    cfg = load_config(require_replicate=not listing_images_only)
+             listing_images_only: bool = False,
+             optimize_existing: bool = False) -> int:
+    if listing_images_only and optimize_existing:
+        raise ValueError('Choose one mode: listing-only or optimize-existing')
+    cfg = load_config(require_replicate=not (listing_images_only or optimize_existing))
     dbx = make_dropbox_client()
 
     ensure_dropbox_folder(dbx, cfg.approved_folder)
@@ -605,7 +614,20 @@ def run_once(limit: Optional[int] = None, only_file: Optional[str] = None,
         attempted += 1
 
         try:
-            if listing_images_only:
+            if optimize_existing:
+                src_path = entry.path_display or entry.path_lower
+                master_path = f"{cfg.upscaled_folder.rstrip('/')}/{entry.name}"
+                if not dropbox_file_exists(dbx, master_path):
+                    raise FileNotFoundError(f"Missing upscaled master: {master_path}")
+                master = download_dropbox_file(dbx, master_path)
+                etsy_png, info = optimize_etsy_png(master)
+                etsy_path = f"{cfg.upscaled_folder.rstrip('/')}/{PurePosixPath(entry.name).stem}_etsy.png"
+                upload_dropbox_file(dbx, etsy_path, etsy_png, overwrite=True)
+                LOG.info("Etsy-safe existing PNG: %s (%s bytes)", etsy_path, info["bytes"])
+                if cfg.generate_listing_images:
+                    generate_listing_assets(dbx, src_path, etsy_path, etsy_png, cfg)
+                changed = True
+            elif listing_images_only:
                 src_path = entry.path_display or entry.path_lower
                 source_png = download_dropbox_file(dbx, src_path)
                 with Image.open(io.BytesIO(source_png)) as image:
@@ -664,6 +686,10 @@ def parse_args() -> argparse.Namespace:
         help="Process only this exact PNG basename from the Approved folder.",
     )
     parser.add_argument(
+        "--optimize-existing", action="store_true",
+        help="Optimize existing /Etsy/Upscaled master for Etsy without running Replicate.",
+    )
+    parser.add_argument(
         "--listing-images-only", action="store_true",
         help="Generate listing JPEGs, sidecar and copy/paste TXT from an existing approved PNG; skip Replicate.",
     )
@@ -683,7 +709,8 @@ def main() -> int:
 
     try:
         return run_once(limit=args.limit, only_file=args.only_file,
-                        listing_images_only=args.listing_images_only)
+                        listing_images_only=args.listing_images_only,
+                        optimize_existing=args.optimize_existing)
     except KeyboardInterrupt:
         LOG.warning("Interrupted")
         return 130
