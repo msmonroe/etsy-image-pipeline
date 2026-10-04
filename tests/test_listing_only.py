@@ -46,7 +46,10 @@ def test_listing_only_does_not_upscale_or_require_replicate(monkeypatch, png_byt
     monkeypatch.setattr(pipeline, "run_replicate_upscale",
                         lambda *args: (_ for _ in ()).throw(AssertionError("Upscaler called")))
     assert pipeline.run_once(only_file=GREEBLE_NAME, listing_images_only=True) == 0
-    assert len([path for path in uploads if path.endswith(".jpg")]) == 4
+    assert len([path for path in uploads if path.endswith(".jpg")]) == 7
+    assert any(path.endswith("05_journal_mockup.jpg") for path in uploads)
+    assert any(path.endswith("06_card_mockup.jpg") for path in uploads)
+    assert any(path.endswith("07_uses_collage.jpg") for path in uploads)
     assert any(path.endswith("_etsy_listing.txt") for path in uploads)
     assert "/Etsy/Approved/greeble_mushroom_forager_3600.etsy.json" in uploads
     assert not any(path.startswith("/Etsy/Upscaled/") for path in uploads)
