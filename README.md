@@ -291,3 +291,15 @@ The mode reads the existing PNG without resizing or calling Replicate. It create
 This mode does not write to `/Etsy/Upscaled`, use Replicate, or call Etsy. It does not overwrite existing JPEG previews unless `OVERWRITE_OUTPUT=true`. The metadata sidecar and manual TXT are refreshed each run; edit the sidecar rather than the generated TXT to preserve copy changes.
 
 For Greeble, listing-only mode also composites the exact approved PNG into a journal example, greeting-card example, and four-use collage. All three extra JPEGs explicitly state **DIGITAL PNG ONLY / MOCKUP FOR INSPIRATION**. These are generated illustrative scenes, not photographs of physical merchandise. Other designs continue to produce four standard previews unless mockups are explicitly enabled in code.
+
+## Automatic Etsy PNG size limit
+
+The normal pipeline keeps the full-resolution master in `/Etsy/Upscaled/<name>.png` and also creates `/Etsy/Upscaled/<name>_etsy.png`. The latter is lossless-compressed first and, **only if necessary**, proportionally resized to 4500, 3600, or 3000 pixels on its longest side until it fits under 19,000,000 bytes. True transparency and 300 PPI metadata are retained. If none fits, the job fails and sends the source to Needs-Review instead of uploading an oversized or aggressively color-reduced file. The generated Etsy listing previews use the optimized PNG. This does not call the Etsy API.
+
+To fix an existing upscaled file **without another paid Replicate call**:
+
+```bash
+python pipeline.py --once --file greeble_cauldron_toad_alchemist.png --optimize-existing
+```
+
+The approved source must still be in `/Etsy/Approved`, and the upscaled master must exist in `/Etsy/Upscaled`. If a matching Etsy sidecar exists in Approved, listing previews and a manual title/description TXT are also generated. `--optimize-existing` overwrites only the separate `_etsy.png` derivative, never the full-resolution master. The source image uploaded in chat is 2048x2048; do not substitute it for the 31 MB upscaled master if you want the larger print resolution.
