@@ -19,7 +19,7 @@ from dotenv import load_dotenv
 from PIL import Image
 
 from listing_images import generate_listing_images
-from listing_copy import GREEBLE_NAME, metadata_for, listing_text
+from listing_copy import ALCHEMIST_NAME, GREEBLE_NAME, metadata_for, listing_text
 from etsy_png_optimizer import optimize_etsy_png
 
 
@@ -244,7 +244,7 @@ def generate_listing_assets(
         width=cfg.listing_image_width,
         height=cfg.listing_image_height,
         jpeg_quality=cfg.listing_image_jpeg_quality,
-        include_mockups=src_image.name == GREEBLE_NAME,
+        include_mockups=src_image.name in {GREEBLE_NAME, ALCHEMIST_NAME},
     )
 
     labels = {
@@ -562,6 +562,7 @@ def process_file(
             etsy_path,
             etsy_png,
             cfg,
+            allow_greeble_fallback=True,
         )
     else:
         copy_sidecar_to_output(
@@ -625,7 +626,7 @@ def run_once(limit: Optional[int] = None, only_file: Optional[str] = None,
                 upload_dropbox_file(dbx, etsy_path, etsy_png, overwrite=True)
                 LOG.info("Etsy-safe existing PNG: %s (%s bytes)", etsy_path, info["bytes"])
                 if cfg.generate_listing_images:
-                    generate_listing_assets(dbx, src_path, etsy_path, etsy_png, cfg)
+                    generate_listing_assets(dbx, src_path, etsy_path, etsy_png, cfg,\n                                            allow_greeble_fallback=True)
                 changed = True
             elif listing_images_only:
                 src_path = entry.path_display or entry.path_lower
