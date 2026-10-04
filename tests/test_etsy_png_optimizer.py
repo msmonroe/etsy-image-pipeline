@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import io
-
 import pytest
 from PIL import Image
-
 from etsy_png_optimizer import EtsyOptimizationError, optimize_etsy_png
 
 
@@ -17,8 +15,8 @@ def _png(size=(128, 128), alpha=True):
     return out.getvalue()
 
 
-def test_optimizer_preserves_alpha_and_300_dpi():
-    result, info = optimize_etsy_png(_png(), target_bytes=500_000)
+def test_square_export_preserves_alpha_and_300_dpi():
+    result, info = optimize_etsy_png(_png((128, 128)), long_edge=128)
     with Image.open(io.BytesIO(result)) as image:
         assert image.mode == "RGBA"
         assert image.getchannel("A").getextrema()[0] == 0
@@ -27,27 +25,25 @@ def test_optimizer_preserves_alpha_and_300_dpi():
     assert info["resized"] is False
 
 
-def test_optimizer_downsizes_only_if_necessary(monkeypatch):
-    import etsy_png_optimizer as opt
-    actual = opt._encode
-    def oversized_at_full_size(image):
-        if image.width > 64:
-            return b"x" * 2000
-        return actual(image)
-    monkeypatch.setattr(opt, "_encode", oversized_at_full_size)
-    data, info = optimize_etsy_png(_png((128, 128)), target_bytes=1500,
-                                    widths=(64,))
-    assert info["etsy_dimensions"] == [64, 64]
-    assert len(data) < 1500
+def test_landscape_export_preserves_aspect_ratio():
+    data, info = optimize_etsy_png(_png((200, 100)), long_edge=100)
+    assert info["etsy_dimensions"] == [100, 50]
+    with Image.open(io.BytesIO(data)) as image:
+        assert image.size == (100, 50)
 
 
-def test_optimizer_fails_closed_if_no_transparency():
+def test_rejects_low_resolution_master():
+    with pytest.raises(EtsyOptimizationError, match="upscale"):
+        optimize_etsy_png(_png((128, 128)), long_edge=3600)
+
+
+def test_rejects_no_transparency():
     with pytest.raises(EtsyOptimizationError, match="transparency"):
-        optimize_etsy_png(_png(alpha=False))
+        optimize_etsy_png(_png(alpha=False), long_edge=128)
 
 
-def test_optimizer_fails_closed_if_no_candidate_fits(monkeypatch):
+def test_rejects_oversize_at_required_resolution(monkeypatch):
     import etsy_png_optimizer as opt
     monkeypatch.setattr(opt, "_encode", lambda image: b"x" * 2000)
-    with pytest.raises(EtsyOptimizationError, match="Cannot fit"):
-        optimize_etsy_png(_png(), target_bytes=1500, widths=(64,))
+    with pytest.raises(EtsyOptimizationError, match="Needs-Review"):
+        optimize_etsy_png(_png(), target_bytes=1500, long_edge=128)
