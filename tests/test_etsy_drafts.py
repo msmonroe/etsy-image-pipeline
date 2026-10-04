@@ -15,6 +15,8 @@ class Session:
 
 
 def client():
+    import os
+    os.environ['ETSY_UPLOAD_ENABLED'] = 'true'
     session = Session()
     return EtsyDraftClient(7, "key", "token", session), session
 
