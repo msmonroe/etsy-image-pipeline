@@ -273,3 +273,7 @@ New modules: `production_workflow.py` and `etsy_drafts.py`. These are opt-in hel
 Run tests: `python -m pytest`. GitHub Actions runs the suite on pushes and pull requests.
 
 **Money boundary:** no API activation method is provided. A person reviews each Etsy draft and publishes it manually, accepting any listing fee at that point.
+
+### Etsy upload safety switch
+
+Etsy uploads are disabled by default. Set `ETSY_UPLOAD_ENABLED=false` in `.env`. Credentials alone do not enable uploads. When API access is ready, explicitly set `ETSY_UPLOAD_ENABLED=true` to allow draft-only uploads. No automatic publishing is implemented.
