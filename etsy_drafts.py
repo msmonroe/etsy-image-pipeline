@@ -8,6 +8,12 @@ from production_workflow import validate_downloads
 BASE = "https://openapi.etsy.com/v3/application"
 
 
+def require_etsy_enabled():
+    """Fail closed: credentials alone must never enable Etsy uploads."""
+    if os.getenv("ETSY_UPLOAD_ENABLED", "").strip().lower() != "true":
+        raise RuntimeError("Etsy uploads disabled (ETSY_UPLOAD_ENABLED is not true)")
+
+
 class EtsyDraftClient:
     def __init__(self, shop_id: int, api_key: str, access_token: str,
                  session=None):
@@ -26,6 +32,7 @@ class EtsyDraftClient:
     def create_draft(self, metadata: dict, images: list[tuple[str, bytes]],
                      downloads: list[tuple[str, bytes]]) -> int:
         """Preflight first; create draft, attach previews and digital downloads."""
+        require_etsy_enabled()
         validate_downloads(downloads)
         if not images:
             raise ValueError("At least one listing preview is required")
@@ -52,6 +59,7 @@ class EtsyDraftClient:
 
 
 def client_from_env(session=None):
+    require_etsy_enabled()
     return EtsyDraftClient(int(os.environ["ETSY_SHOP_ID"]),
                            os.environ["ETSY_API_KEY"],
                            os.environ["ETSY_ACCESS_TOKEN"], session=session)
