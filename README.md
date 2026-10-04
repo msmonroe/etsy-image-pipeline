@@ -277,3 +277,15 @@ Run tests: `python -m pytest`. GitHub Actions runs the suite on pushes and pull 
 ### Etsy upload safety switch
 
 Etsy uploads are disabled by default. Set `ETSY_UPLOAD_ENABLED=false` in `.env`. Credentials alone do not enable uploads. When API access is ready, explicitly set `ETSY_UPLOAD_ENABLED=true` to allow draft-only uploads. No automatic publishing is implemented.
+
+## Listing images only (no Replicate, no Etsy API)
+
+Use this for an already-exported transparent PNG in `/Etsy/Approved`:
+
+```bash
+python pipeline.py --once --file greeble_mushroom_forager_3600.png --listing-images-only
+```
+
+The mode reads the existing PNG without resizing or calling Replicate. It creates four JPEG previews in `/Etsy/Listing-Images/<listing_key>/`, writes `<image-stem>_etsy_listing.txt` in the same folder for manual title/description copying, and updates `/Etsy/Approved/<image-stem>.etsy.json` with listing image paths. Greeble #01 has curated fallback copy if its sidecar does not yet exist. Other artwork requires a sidecar with `title`, `description`, and `digital_files`. An existing sidecar takes priority over Greeble's fallback.
+
+This mode does not write to `/Etsy/Upscaled`, use Replicate, or call Etsy. It does not overwrite existing JPEG previews unless `OVERWRITE_OUTPUT=true`. The metadata sidecar and manual TXT are refreshed each run; edit the sidecar rather than the generated TXT to preserve copy changes.
