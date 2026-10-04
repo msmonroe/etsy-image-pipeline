@@ -19,6 +19,7 @@ from dotenv import load_dotenv
 from PIL import Image
 
 from listing_images import generate_listing_images
+from listing_copy import metadata_for, listing_text
 
 
 load_dotenv()
@@ -62,12 +63,12 @@ def env_bool(name: str, default: bool = False) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def load_config() -> Config:
+def load_config(require_replicate: bool = True) -> Config:
     token = os.getenv("REPLICATE_API_TOKEN", "").strip()
     model = os.getenv("REPLICATE_MODEL", "nightmareai/real-esrgan").strip()
     version = os.getenv("REPLICATE_MODEL_VERSION", "").strip()
 
-    if not token:
+    if require_replicate and not token:
         raise RuntimeError("REPLICATE_API_TOKEN is required")
     if "/" not in model:
         raise RuntimeError("REPLICATE_MODEL must look like owner/model")
@@ -209,18 +210,18 @@ def generate_listing_assets(
     dst_image_path: str,
     final_png: bytes,
     cfg: Config,
+    *,
+    allow_greeble_fallback: bool = False,
 ) -> None:
     src_image = PurePosixPath(src_image_path)
     src_sidecar = str(src_image.with_name(f"{src_image.stem}.etsy.json"))
 
-    if not dropbox_file_exists(dbx, src_sidecar):
-        LOG.info(
-            "No Etsy sidecar found for %s; listing-image generation skipped",
-            src_image.name,
-        )
+    sidecar_exists = dropbox_file_exists(dbx, src_sidecar)
+    if not sidecar_exists and not allow_greeble_fallback:
+        LOG.info("No Etsy sidecar found for %s; listing-image generation skipped", src_image.name)
         return
-
-    metadata = json.loads(download_dropbox_file(dbx, src_sidecar).decode("utf-8"))
+    supplied = json.loads(download_dropbox_file(dbx, src_sidecar).decode("utf-8")) if sidecar_exists else None
+    metadata = metadata_for(src_image.name, supplied)
     listing_key = str(metadata.get("listing_key") or src_image.stem)
     safe_listing_key = "".join(
         ch if ch.isalnum() or ch in {"-", "_"} else "_"
@@ -282,9 +283,12 @@ def generate_listing_assets(
 
     metadata_bytes = (json.dumps(metadata, indent=2) + "\n").encode("utf-8")
     upload_dropbox_file(dbx, src_sidecar, metadata_bytes, overwrite=True)
-
-    dst_sidecar = f"{cfg.upscaled_folder.rstrip('/')}/{src_image.stem}.etsy.json"
-    upload_dropbox_file(dbx, dst_sidecar, metadata_bytes, overwrite=True)
+    if dst_image_path != src_image_path:
+        dst_sidecar = f"{cfg.upscaled_folder.rstrip('/')}/{src_image.stem}.etsy.json"
+        upload_dropbox_file(dbx, dst_sidecar, metadata_bytes, overwrite=True)
+    copy_path = f"{listing_folder}/{src_image.stem}_etsy_listing.txt"
+    upload_dropbox_file(dbx, copy_path, listing_text(metadata), overwrite=True)
+    LOG.info("Wrote manual Etsy copy: %s", copy_path)
     LOG.info(
         "Updated Etsy sidecars with %s listing images",
         len(listing_entries),
@@ -567,13 +571,15 @@ def process_file(
     return True
 
 
-def run_once(limit: Optional[int] = None, only_file: Optional[str] = None) -> int:
-    cfg = load_config()
+def run_once(limit: Optional[int] = None, only_file: Optional[str] = None,
+             listing_images_only: bool = False) -> int:
+    cfg = load_config(require_replicate=not listing_images_only)
     dbx = make_dropbox_client()
 
     ensure_dropbox_folder(dbx, cfg.approved_folder)
-    ensure_dropbox_folder(dbx, cfg.upscaled_folder)
-    if cfg.generate_listing_images:
+    if not listing_images_only:
+        ensure_dropbox_folder(dbx, cfg.upscaled_folder)
+    if cfg.generate_listing_images or listing_images_only:
         ensure_dropbox_folder(dbx, cfg.listing_images_folder)
     if cfg.copy_failures_to_review:
         ensure_dropbox_folder(dbx, cfg.needs_review_folder)
@@ -595,7 +601,18 @@ def run_once(limit: Optional[int] = None, only_file: Optional[str] = None) -> in
         attempted += 1
 
         try:
-            changed = process_file(dbx, entry, cfg)
+            if listing_images_only:
+                src_path = entry.path_display or entry.path_lower
+                source_png = download_dropbox_file(dbx, src_path)
+                with Image.open(io.BytesIO(source_png)) as image:
+                    image.verify()
+                generate_listing_assets(
+                    dbx, src_path, src_path, source_png, cfg,
+                    allow_greeble_fallback=True,
+                )
+                changed = True
+            else:
+                changed = process_file(dbx, entry, cfg)
             if changed:
                 processed += 1
             else:
@@ -642,6 +659,10 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Process only this exact PNG basename from the Approved folder.",
     )
+    parser.add_argument(
+        "--listing-images-only", action="store_true",
+        help="Generate listing JPEGs, sidecar and copy/paste TXT from an existing approved PNG; skip Replicate.",
+    )
     return parser.parse_args()
 
 
@@ -657,7 +678,8 @@ def main() -> int:
         LOG.info("No daemon loop is implemented by design; running one pass.")
 
     try:
-        return run_once(limit=args.limit, only_file=args.only_file)
+        return run_once(limit=args.limit, only_file=args.only_file,
+                        listing_images_only=args.listing_images_only)
     except KeyboardInterrupt:
         LOG.warning("Interrupted")
         return 130
