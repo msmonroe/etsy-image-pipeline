@@ -626,7 +626,8 @@ def run_once(limit: Optional[int] = None, only_file: Optional[str] = None,
                 upload_dropbox_file(dbx, etsy_path, etsy_png, overwrite=True)
                 LOG.info("Etsy-safe existing PNG: %s (%s bytes)", etsy_path, info["bytes"])
                 if cfg.generate_listing_images:
-                    generate_listing_assets(dbx, src_path, etsy_path, etsy_png, cfg,\n                                            allow_greeble_fallback=True)
+                    generate_listing_assets(dbx, src_path, etsy_path, etsy_png, cfg,
+                                            allow_greeble_fallback=True)
                 changed = True
             elif listing_images_only:
                 src_path = entry.path_display or entry.path_lower
