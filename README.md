@@ -294,7 +294,7 @@ For Greeble, listing-only mode also composites the exact approved PNG into a jou
 
 ## Automatic Etsy PNG size limit
 
-The normal pipeline keeps the full-resolution master in `/Etsy/Upscaled/<name>.png` and also creates `/Etsy/Upscaled/<name>_etsy.png`. The latter is lossless-compressed first and, **only if necessary**, proportionally resized to 4500, 3600, or 3000 pixels on its longest side until it fits under 19,000,000 bytes. True transparency and 300 PPI metadata are retained. If none fits, the job fails and sends the source to Needs-Review instead of uploading an oversized or aggressively color-reduced file. The generated Etsy listing previews use the optimized PNG. This does not call the Etsy API.
+The normal pipeline keeps the full-resolution master in `/Etsy/Upscaled/<name>.png` and also creates `/Etsy/Upscaled/<name>_etsy.png`. The latter is exported at **3600 × 3600 for square artwork**, or 3600 pixels on the longest side for other aspect ratios, then lossless-compressed under 19,000,000 bytes. True transparency and 300 PPI metadata are retained. If the upscaled master is too small or the required dimensions cannot fit, the job fails and sends the source to Needs-Review instead of uploading an oversized or aggressively color-reduced file. The generated Etsy listing previews use the optimized PNG. This does not call the Etsy API.
 
 To fix an existing upscaled file **without another paid Replicate call**:
 
