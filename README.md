@@ -256,3 +256,50 @@ BUNDLE_MAX_LISTING_FILES=5
 Existing bundles are not overwritten unless `OVERWRITE_OUTPUT=true`.
 
 The detailed vector collection is intended for print, sublimation, DTF, stickers, posters, engraving, and digital design. It should not be advertised as general-purpose Cricut/Silhouette cut-ready artwork. DXF remains reserved for a future simplified cutter-specific workflow.
+
+
+## Safe product-specific exports and Etsy draft preparation
+
+New modules: `production_workflow.py` and `etsy_drafts.py`. These are opt-in helpers; the existing scheduled Dropbox worker is unchanged until they are explicitly integrated into the production orchestration.
+
+- Plan output by product: `clipart` 4500x4500, `sticker` 3000x3000, `shirt` 4500x5400, `wall_3x4` 3600x4800. All PNG exports carry 300 PPI metadata.
+- `plan_export(source_size, product)` skips unnecessary enlargement. When enlargement is needed, it returns a scale for the existing upscaler. Run image QC before `export_png`; a resize is not a substitute for genuine detail.
+- Keep colorful illustration assets separate from cutting designs. `validate_cut_design` requires simplified, closed, non-overlapping paths before advertising cut-ready SVG/DXF. The current vector worker does **not** produce DXF automatically.
+- `validate_downloads` checks Etsy's five-file and 20,000,000-byte per-file ceilings before a network call. Bundle archives conservatively (the existing bundler defaults to 19 MiB, which is larger than 19 decimal MB; keep actual Etsy payloads below 20,000,000 bytes).
+- `EtsyDraftClient.create_draft(metadata, images, downloads)` creates a draft and uploads separate JPEG previews and digital download files. It never publishes. Validate titles, descriptions, formats, artwork rights, Etsy category and current API field requirements during human review.
+- The draft client expects an existing Etsy OAuth access token with `listings_w` and `ETSY_API_KEY` / `ETSY_SHOP_ID`. OAuth authorization and refresh-token management must be configured separately before unattended operation. Never commit tokens.
+- Network failures can leave a partial draft. Record the returned listing ID and reconcile uploads before retrying; do not blindly recreate a listing.
+
+Run tests: `python -m pytest`. GitHub Actions runs the suite on pushes and pull requests.
+
+**Money boundary:** no API activation method is provided. A person reviews each Etsy draft and publishes it manually, accepting any listing fee at that point.
+
+### Etsy upload safety switch
+
+Etsy uploads are disabled by default. Set `ETSY_UPLOAD_ENABLED=false` in `.env`. Credentials alone do not enable uploads. When API access is ready, explicitly set `ETSY_UPLOAD_ENABLED=true` to allow draft-only uploads. No automatic publishing is implemented.
+
+## Listing images only (no Replicate, no Etsy API)
+
+Use this for an already-exported transparent PNG in `/Etsy/Approved`:
+
+```bash
+python pipeline.py --once --file greeble_mushroom_forager_3600.png --listing-images-only
+```
+
+The mode reads the existing PNG without resizing or calling Replicate. It creates four JPEG previews in `/Etsy/Listing-Images/<listing_key>/`, writes `<image-stem>_etsy_listing.txt` in the same folder for manual title/description copying, and updates `/Etsy/Approved/<image-stem>.etsy.json` with listing image paths. Greeble #01 has curated fallback copy if its sidecar does not yet exist. Other artwork requires a sidecar with `title`, `description`, and `digital_files`. An existing sidecar takes priority over Greeble's fallback.
+
+This mode does not write to `/Etsy/Upscaled`, use Replicate, or call Etsy. It does not overwrite existing JPEG previews unless `OVERWRITE_OUTPUT=true`. The metadata sidecar and manual TXT are refreshed each run; edit the sidecar rather than the generated TXT to preserve copy changes.
+
+For Greeble, listing-only mode also composites the exact approved PNG into a journal example, greeting-card example, and four-use collage. All three extra JPEGs explicitly state **DIGITAL PNG ONLY / MOCKUP FOR INSPIRATION**. These are generated illustrative scenes, not photographs of physical merchandise. Other designs continue to produce four standard previews unless mockups are explicitly enabled in code.
+
+## Automatic Etsy PNG size limit
+
+The normal pipeline keeps the full-resolution master in `/Etsy/Upscaled/<name>.png` and also creates `/Etsy/Upscaled/<name>_etsy.png`. The latter is exported at **3600 × 3600 for square artwork**, or 3600 pixels on the longest side for other aspect ratios, then lossless-compressed under 19,000,000 bytes. True transparency and 300 PPI metadata are retained. If the upscaled master is too small or the required dimensions cannot fit, the job fails and sends the source to Needs-Review instead of uploading an oversized or aggressively color-reduced file. The generated Etsy listing previews use the optimized PNG. This does not call the Etsy API.
+
+To fix an existing upscaled file **without another paid Replicate call**:
+
+```bash
+python pipeline.py --once --file greeble_cauldron_toad_alchemist.png --optimize-existing
+```
+
+The approved source must still be in `/Etsy/Approved`, and the upscaled master must exist in `/Etsy/Upscaled`. If a matching Etsy sidecar exists in Approved, listing previews and a manual title/description TXT are also generated. `--optimize-existing` overwrites only the separate `_etsy.png` derivative, never the full-resolution master. The source image uploaded in chat is 2048x2048; do not substitute it for the 31 MB upscaled master if you want the larger print resolution.

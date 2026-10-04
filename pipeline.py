@@ -19,6 +19,8 @@ from dotenv import load_dotenv
 from PIL import Image
 
 from listing_images import generate_listing_images
+from listing_copy import ALCHEMIST_NAME, GREEBLE_NAME, metadata_for, listing_text
+from etsy_png_optimizer import optimize_etsy_png
 
 
 load_dotenv()
@@ -62,12 +64,12 @@ def env_bool(name: str, default: bool = False) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def load_config() -> Config:
+def load_config(require_replicate: bool = True) -> Config:
     token = os.getenv("REPLICATE_API_TOKEN", "").strip()
     model = os.getenv("REPLICATE_MODEL", "nightmareai/real-esrgan").strip()
     version = os.getenv("REPLICATE_MODEL_VERSION", "").strip()
 
-    if not token:
+    if require_replicate and not token:
         raise RuntimeError("REPLICATE_API_TOKEN is required")
     if "/" not in model:
         raise RuntimeError("REPLICATE_MODEL must look like owner/model")
@@ -209,18 +211,18 @@ def generate_listing_assets(
     dst_image_path: str,
     final_png: bytes,
     cfg: Config,
+    *,
+    allow_greeble_fallback: bool = False,
 ) -> None:
     src_image = PurePosixPath(src_image_path)
     src_sidecar = str(src_image.with_name(f"{src_image.stem}.etsy.json"))
 
-    if not dropbox_file_exists(dbx, src_sidecar):
-        LOG.info(
-            "No Etsy sidecar found for %s; listing-image generation skipped",
-            src_image.name,
-        )
+    sidecar_exists = dropbox_file_exists(dbx, src_sidecar)
+    if not sidecar_exists and not allow_greeble_fallback:
+        LOG.info("No Etsy sidecar found for %s; listing-image generation skipped", src_image.name)
         return
-
-    metadata = json.loads(download_dropbox_file(dbx, src_sidecar).decode("utf-8"))
+    supplied = json.loads(download_dropbox_file(dbx, src_sidecar).decode("utf-8")) if sidecar_exists else None
+    metadata = metadata_for(src_image.name, supplied)
     listing_key = str(metadata.get("listing_key") or src_image.stem)
     safe_listing_key = "".join(
         ch if ch.isalnum() or ch in {"-", "_"} else "_"
@@ -242,6 +244,7 @@ def generate_listing_assets(
         width=cfg.listing_image_width,
         height=cfg.listing_image_height,
         jpeg_quality=cfg.listing_image_jpeg_quality,
+        include_mockups=src_image.name in {GREEBLE_NAME, ALCHEMIST_NAME},
     )
 
     labels = {
@@ -249,6 +252,9 @@ def generate_listing_assets(
         "02_detail.jpg": "Artwork detail preview",
         "03_specs.jpg": "Digital file specifications",
         "04_included.jpg": "Files included in this digital download",
+        "05_journal_mockup.jpg": "Example of Greeble PNG on a woodland junk journal; digital artwork only",
+        "06_card_mockup.jpg": "Example of Greeble PNG on a greeting card; digital artwork only",
+        "07_uses_collage.jpg": "Illustrative journal, card, tote and mug examples; digital PNG only",
     }
 
     listing_entries = []
@@ -282,9 +288,12 @@ def generate_listing_assets(
 
     metadata_bytes = (json.dumps(metadata, indent=2) + "\n").encode("utf-8")
     upload_dropbox_file(dbx, src_sidecar, metadata_bytes, overwrite=True)
-
-    dst_sidecar = f"{cfg.upscaled_folder.rstrip('/')}/{src_image.stem}.etsy.json"
-    upload_dropbox_file(dbx, dst_sidecar, metadata_bytes, overwrite=True)
+    if dst_image_path != src_image_path:
+        dst_sidecar = f"{cfg.upscaled_folder.rstrip('/')}/{src_image.stem}.etsy.json"
+        upload_dropbox_file(dbx, dst_sidecar, metadata_bytes, overwrite=True)
+    copy_path = f"{listing_folder}/{src_image.stem}_etsy_listing.txt"
+    upload_dropbox_file(dbx, copy_path, listing_text(metadata), overwrite=True)
+    LOG.info("Wrote manual Etsy copy: %s", copy_path)
     LOG.info(
         "Updated Etsy sidecars with %s listing images",
         len(listing_entries),
@@ -539,15 +548,21 @@ def process_file(
     upscaled_raw = run_replicate_upscale(source, cfg)
     final_png = restore_alpha(source, upscaled_raw)
     width, height, has_alpha = validate_output(source, final_png, cfg)
+    etsy_png, etsy_info = optimize_etsy_png(final_png)
+    etsy_path = f"{cfg.upscaled_folder.rstrip('/')}/{PurePosixPath(entry.name).stem}_etsy.png"
 
     upload_dropbox_file(dbx, dst_path, final_png, overwrite=cfg.overwrite_output)
+    upload_dropbox_file(dbx, etsy_path, etsy_png, overwrite=True)
+    LOG.info("Etsy-safe PNG: %s (%s bytes, %s)", etsy_path,
+             etsy_info["bytes"], etsy_info["etsy_dimensions"])
     if cfg.generate_listing_images:
         generate_listing_assets(
             dbx,
             src_path,
-            dst_path,
-            final_png,
+            etsy_path,
+            etsy_png,
             cfg,
+            allow_greeble_fallback=True,
         )
     else:
         copy_sidecar_to_output(
@@ -567,13 +582,18 @@ def process_file(
     return True
 
 
-def run_once(limit: Optional[int] = None, only_file: Optional[str] = None) -> int:
-    cfg = load_config()
+def run_once(limit: Optional[int] = None, only_file: Optional[str] = None,
+             listing_images_only: bool = False,
+             optimize_existing: bool = False) -> int:
+    if listing_images_only and optimize_existing:
+        raise ValueError('Choose one mode: listing-only or optimize-existing')
+    cfg = load_config(require_replicate=not (listing_images_only or optimize_existing))
     dbx = make_dropbox_client()
 
     ensure_dropbox_folder(dbx, cfg.approved_folder)
-    ensure_dropbox_folder(dbx, cfg.upscaled_folder)
-    if cfg.generate_listing_images:
+    if not listing_images_only:
+        ensure_dropbox_folder(dbx, cfg.upscaled_folder)
+    if cfg.generate_listing_images or listing_images_only:
         ensure_dropbox_folder(dbx, cfg.listing_images_folder)
     if cfg.copy_failures_to_review:
         ensure_dropbox_folder(dbx, cfg.needs_review_folder)
@@ -595,7 +615,32 @@ def run_once(limit: Optional[int] = None, only_file: Optional[str] = None) -> in
         attempted += 1
 
         try:
-            changed = process_file(dbx, entry, cfg)
+            if optimize_existing:
+                src_path = entry.path_display or entry.path_lower
+                master_path = f"{cfg.upscaled_folder.rstrip('/')}/{entry.name}"
+                if not dropbox_file_exists(dbx, master_path):
+                    raise FileNotFoundError(f"Missing upscaled master: {master_path}")
+                master = download_dropbox_file(dbx, master_path)
+                etsy_png, info = optimize_etsy_png(master)
+                etsy_path = f"{cfg.upscaled_folder.rstrip('/')}/{PurePosixPath(entry.name).stem}_etsy.png"
+                upload_dropbox_file(dbx, etsy_path, etsy_png, overwrite=True)
+                LOG.info("Etsy-safe existing PNG: %s (%s bytes)", etsy_path, info["bytes"])
+                if cfg.generate_listing_images:
+                    generate_listing_assets(dbx, src_path, etsy_path, etsy_png, cfg,
+                                            allow_greeble_fallback=True)
+                changed = True
+            elif listing_images_only:
+                src_path = entry.path_display or entry.path_lower
+                source_png = download_dropbox_file(dbx, src_path)
+                with Image.open(io.BytesIO(source_png)) as image:
+                    image.verify()
+                generate_listing_assets(
+                    dbx, src_path, src_path, source_png, cfg,
+                    allow_greeble_fallback=True,
+                )
+                changed = True
+            else:
+                changed = process_file(dbx, entry, cfg)
             if changed:
                 processed += 1
             else:
@@ -642,6 +687,14 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Process only this exact PNG basename from the Approved folder.",
     )
+    parser.add_argument(
+        "--optimize-existing", action="store_true",
+        help="Optimize existing /Etsy/Upscaled master for Etsy without running Replicate.",
+    )
+    parser.add_argument(
+        "--listing-images-only", action="store_true",
+        help="Generate listing JPEGs, sidecar and copy/paste TXT from an existing approved PNG; skip Replicate.",
+    )
     return parser.parse_args()
 
 
@@ -657,7 +710,9 @@ def main() -> int:
         LOG.info("No daemon loop is implemented by design; running one pass.")
 
     try:
-        return run_once(limit=args.limit, only_file=args.only_file)
+        return run_once(limit=args.limit, only_file=args.only_file,
+                        listing_images_only=args.listing_images_only,
+                        optimize_existing=args.optimize_existing)
     except KeyboardInterrupt:
         LOG.warning("Interrupted")
         return 130

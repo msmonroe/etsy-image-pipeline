@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Iterable
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from listing_mockups import generate_mockups
 
 
 @dataclass(frozen=True)
@@ -293,6 +294,7 @@ def generate_listing_images(
     width: int = 2400,
     height: int = 2000,
     jpeg_quality: int = 90,
+    include_mockups: bool = False,
 ) -> dict[str, bytes]:
     spec = ListingImageSpec(
         width=width,
@@ -307,7 +309,7 @@ def generate_listing_images(
         dpi = int(round(dpi_info[0])) if dpi_info else 300
         transparent = art.getchannel("A").getextrema()[0] < 255
 
-        return {
+        generated = {
             "01_hero.jpg": hero_image(art, spec),
             "02_detail.jpg": detail_image(art, spec),
             "03_specs.jpg": specs_image(
@@ -317,3 +319,6 @@ def generate_listing_images(
                 art, spec, digital_filenames
             ),
         }
+        if include_mockups:
+            generated.update(generate_mockups(art, width, height, jpeg_quality))
+        return generated

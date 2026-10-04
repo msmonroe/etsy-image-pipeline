@@ -124,7 +124,7 @@ def test_run_once_file_filter_processes_only_requested(monkeypatch):
     ]
     processed = []
 
-    monkeypatch.setattr(pipeline, "load_config", lambda: cfg)
+    monkeypatch.setattr(pipeline, "load_config", lambda require_replicate=True: cfg)
     monkeypatch.setattr(pipeline, "make_dropbox_client", lambda: object())
     monkeypatch.setattr(pipeline, "ensure_dropbox_folder", lambda *args: None)
     monkeypatch.setattr(pipeline, "list_pngs", lambda *args: iter(entries))
@@ -140,7 +140,7 @@ def test_run_once_file_filter_processes_only_requested(monkeypatch):
 
 def test_run_once_missing_requested_file_fails(monkeypatch):
     cfg = make_config()
-    monkeypatch.setattr(pipeline, "load_config", lambda: cfg)
+    monkeypatch.setattr(pipeline, "load_config", lambda require_replicate=True: cfg)
     monkeypatch.setattr(pipeline, "make_dropbox_client", lambda: object())
     monkeypatch.setattr(pipeline, "ensure_dropbox_folder", lambda *args: None)
     monkeypatch.setattr(pipeline, "list_pngs", lambda *args: iter([]))
