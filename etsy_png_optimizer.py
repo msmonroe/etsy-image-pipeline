@@ -1,12 +1,12 @@
-"""Create an Etsy-safe transparent PNG without altering the upscaled master."""
+"""Etsy transparent PNG export at a predictable print resolution."""
 from __future__ import annotations
 
 import io
 from PIL import Image
 
-# Etsy uses decimal MB. Leave headroom for metadata and future platform changes.
 ETSY_MAX_BYTES = 20_000_000
 DEFAULT_TARGET_BYTES = 19_000_000
+DEFAULT_LONG_EDGE = 3600
 
 
 class EtsyOptimizationError(ValueError):
@@ -23,51 +23,50 @@ def _encode(image: Image.Image) -> bytes:
 def optimize_etsy_png(
     source: bytes,
     target_bytes: int = DEFAULT_TARGET_BYTES,
-    widths: tuple[int, ...] = (4500, 3600, 3000),
+    long_edge: int = DEFAULT_LONG_EDGE,
 ) -> tuple[bytes, dict]:
-    """Lossless PNG encoding, then proportional downscaling only when needed.
+    """Export at the requested long edge, preserving aspect ratio and alpha.
 
-    Preserve the original alpha and RGB mode, with no palette reduction or
-    JPEG conversion. Never silently return an oversized or undersized file.
+    A source smaller than the requested resolution must first pass through
+    the actual upscaler; this export step never pretends interpolation adds detail.
     """
     if not 0 < target_bytes < ETSY_MAX_BYTES:
         raise ValueError("target_bytes must be below Etsy's 20 MB ceiling")
+    if long_edge <= 0:
+        raise ValueError("long_edge must be positive")
     with Image.open(io.BytesIO(source)) as opened:
         if opened.format != "PNG":
             raise EtsyOptimizationError("Expected PNG source")
         image = opened.convert("RGBA")
     original_size = image.size
-    has_alpha = image.getchannel("A").getextrema()[0] < 255
-    if not has_alpha:
+    if image.getchannel("A").getextrema()[0] == 255:
         raise EtsyOptimizationError("Expected actual transparency in the PNG")
-
-    # First try the original dimensions with a stronger lossless compressor.
-    candidates = [image]
-    for width in widths:
-        if width <= 0:
-            raise ValueError("widths must be positive")
-        if max(original_size) > width:
-            ratio = width / max(original_size)
-            size = (max(1, round(original_size[0] * ratio)),
-                    max(1, round(original_size[1] * ratio)))
-            if size != candidates[-1].size:
-                candidates.append(image.resize(size, Image.Resampling.LANCZOS))
-
-    for candidate in candidates:
-        data = _encode(candidate)
-        if len(data) <= target_bytes:
-            with Image.open(io.BytesIO(data)) as verified:
-                verified.verify()
-            return data, {
-                "source_dimensions": list(original_size),
-                "etsy_dimensions": list(candidate.size),
-                "bytes": len(data),
-                "has_transparency": True,
-                "dpi": 300,
-                "resized": candidate.size != original_size,
-            }
-    raise EtsyOptimizationError(
-        "Cannot fit a true-color transparent PNG under the Etsy limit "
-        "without going below the configured minimum resolution. "
-        "Review manually; master is unchanged."
+    if max(original_size) < long_edge:
+        raise EtsyOptimizationError(
+            f"Master is only {original_size[0]}x{original_size[1]}; "
+            f"upscale to at least {long_edge}px on the longest side first"
+        )
+    ratio = long_edge / max(original_size)
+    target_size = (
+        max(1, round(original_size[0] * ratio)),
+        max(1, round(original_size[1] * ratio)),
     )
+    if target_size != original_size:
+        image = image.resize(target_size, Image.Resampling.LANCZOS)
+    result = _encode(image)
+    if len(result) > target_bytes:
+        raise EtsyOptimizationError(
+            f"Requested {target_size[0]}x{target_size[1]} true-color PNG "
+            f"is {len(result)} bytes, over {target_bytes}; "
+            "send to Needs-Review rather than silently reducing resolution"
+        )
+    with Image.open(io.BytesIO(result)) as verified:
+        verified.verify()
+    return result, {
+        "source_dimensions": list(original_size),
+        "etsy_dimensions": list(target_size),
+        "bytes": len(result),
+        "has_transparency": True,
+        "dpi": 300,
+        "resized": target_size != original_size,
+    }
