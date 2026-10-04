@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import PurePosixPath
 
 GREEBLE_NAME = "greeble_mushroom_forager_3600.png"
+ALCHEMIST_NAME = "greeble_cauldron_toad_alchemist.png"
 
 GREEBLE = {
     "listing_key": "greeble_mushroom_forager",
@@ -28,12 +29,39 @@ GREEBLE = {
 }
 
 
+ALCHEMIST = {
+    "listing_key": "greeble_cauldron_toad_alchemist",
+    "title": "Greeble Cauldron Alchemist PNG | Goblin Witch Clipart | Autumn Fantasy Art",
+    "description": (
+        "Meet Greeble, the cheerful woodland alchemist! This detailed autumn fantasy "
+        "illustration features a glowing cauldron, a friendly toad, mushrooms, candles "
+        "and antique spellbooks. Perfect for junk journals, greeting cards, scrapbooks "
+        "and other personal crafts.\\n\\n"
+        "YOU WILL RECEIVE\\n"
+        "1 high-resolution transparent PNG digital download. Exact pixel dimensions "
+        "are shown in the listing specifications. No physical product, printed card, "
+        "mug or tote bag is included. Listing mockups are for inspiration only.\\n\\n"
+        "This illustration was created with assistance from an AI generator."
+    ),
+    "tags": ["goblin clipart", "witchy clipart", "autumn clipart", "toad clipart",
+             "fantasy clipart", "goblincore art", "digital download",
+             "mushroom clipart", "woodland clipart", "junk journal art",
+             "transparent png", "cauldron art", "cottagecore art"],
+    "digital_files": [{"filename": ALCHEMIST_NAME}],
+}
+
+
 def metadata_for(source_name: str, supplied: dict | None) -> dict:
     """Prefer the user's sidecar; only Greeble has an approved fallback."""
     if supplied is not None:
         if not isinstance(supplied, dict):
             raise ValueError("Etsy sidecar must be a JSON object")
         metadata = dict(supplied)
+    elif source_name == ALCHEMIST_NAME:
+        metadata = {
+            **ALCHEMIST,
+            "digital_files": [dict(item) for item in ALCHEMIST["digital_files"]],
+        }
     elif source_name == GREEBLE_NAME:
         metadata = {
             **GREEBLE,
