@@ -19,7 +19,7 @@ from dotenv import load_dotenv
 from PIL import Image
 
 from listing_images import generate_listing_images
-from listing_copy import metadata_for, listing_text
+from listing_copy import GREEBLE_NAME, metadata_for, listing_text
 
 
 load_dotenv()
@@ -243,6 +243,7 @@ def generate_listing_assets(
         width=cfg.listing_image_width,
         height=cfg.listing_image_height,
         jpeg_quality=cfg.listing_image_jpeg_quality,
+        include_mockups=src_image.name == GREEBLE_NAME,
     )
 
     labels = {
@@ -250,6 +251,9 @@ def generate_listing_assets(
         "02_detail.jpg": "Artwork detail preview",
         "03_specs.jpg": "Digital file specifications",
         "04_included.jpg": "Files included in this digital download",
+        "05_journal_mockup.jpg": "Example of Greeble PNG on a woodland junk journal; digital artwork only",
+        "06_card_mockup.jpg": "Example of Greeble PNG on a greeting card; digital artwork only",
+        "07_uses_collage.jpg": "Illustrative journal, card, tote and mug examples; digital PNG only",
     }
 
     listing_entries = []
