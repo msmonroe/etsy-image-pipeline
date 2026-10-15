@@ -359,3 +359,9 @@ git pull --ff-only origin main
 ```
 
 **Etsy safety:** `ETSY_UPLOAD_ENABLED` stays false unless explicitly enabled. Draft uploads, when configured, do not publish a listing; final publication remains manual.
+
+### Opaque PNG handling and batch repair
+
+The exporter accepts both transparent and fully opaque PNG masters, preserving the original alpha values rather than inventing transparency. A fully opaque export is suitable only for artwork intended to have a background; review the image if a transparent clipart product was expected. The optimizer reports `has_transparency` accurately.
+
+Batch existing masters with `GENERATE_LISTING_IMAGES=false python pipeline.py --once --optimize-existing`. This reads Approved names and finds matching Upscaled masters. An approved-only file without a matching Upscaled master is reported as a failure; it is not automatically upscaled in this mode. In particular, `/Etsy/Approved/greeble_mushroom_forager_3600.png` requires a separate export workflow because the matching Upscaled master is absent.
