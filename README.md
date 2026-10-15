@@ -256,3 +256,127 @@ BUNDLE_MAX_LISTING_FILES=5
 Existing bundles are not overwritten unless `OVERWRITE_OUTPUT=true`.
 
 The detailed vector collection is intended for print, sublimation, DTF, stickers, posters, engraving, and digital design. It should not be advertised as general-purpose Cricut/Silhouette cut-ready artwork. DXF remains reserved for a future simplified cutter-specific workflow.
+
+
+## Safe product-specific exports and Etsy draft preparation
+
+New modules: `production_workflow.py` and `etsy_drafts.py`. These are opt-in helpers; the existing scheduled Dropbox worker is unchanged until they are explicitly integrated into the production orchestration.
+
+- Plan output by product: `clipart` 4500x4500, `sticker` 3000x3000, `shirt` 4500x5400, `wall_3x4` 3600x4800. All PNG exports carry 300 PPI metadata.
+- `plan_export(source_size, product)` skips unnecessary enlargement. When enlargement is needed, it returns a scale for the existing upscaler. Run image QC before `export_png`; a resize is not a substitute for genuine detail.
+- Keep colorful illustration assets separate from cutting designs. `validate_cut_design` requires simplified, closed, non-overlapping paths before advertising cut-ready SVG/DXF. The current vector worker does **not** produce DXF automatically.
+- `validate_downloads` checks Etsy's five-file and 20,000,000-byte per-file ceilings before a network call. Bundle archives conservatively (the existing bundler defaults to 19 MiB, which is larger than 19 decimal MB; keep actual Etsy payloads below 20,000,000 bytes).
+- `EtsyDraftClient.create_draft(metadata, images, downloads)` creates a draft and uploads separate JPEG previews and digital download files. It never publishes. Validate titles, descriptions, formats, artwork rights, Etsy category and current API field requirements during human review.
+- The draft client expects an existing Etsy OAuth access token with `listings_w` and `ETSY_API_KEY` / `ETSY_SHOP_ID`. OAuth authorization and refresh-token management must be configured separately before unattended operation. Never commit tokens.
+- Network failures can leave a partial draft. Record the returned listing ID and reconcile uploads before retrying; do not blindly recreate a listing.
+
+Run tests: `python -m pytest`. GitHub Actions runs the suite on pushes and pull requests.
+
+**Money boundary:** no API activation method is provided. A person reviews each Etsy draft and publishes it manually, accepting any listing fee at that point.
+
+### Etsy upload safety switch
+
+Etsy uploads are disabled by default. Set `ETSY_UPLOAD_ENABLED=false` in `.env`. Credentials alone do not enable uploads. When API access is ready, explicitly set `ETSY_UPLOAD_ENABLED=true` to allow draft-only uploads. No automatic publishing is implemented.
+
+## Listing images only (no Replicate, no Etsy API)
+
+Use this for an already-exported transparent PNG in `/Etsy/Approved`:
+
+```bash
+python pipeline.py --once --file greeble_mushroom_forager_3600.png --listing-images-only
+```
+
+The mode reads the existing PNG without resizing or calling Replicate. It creates four JPEG previews in `/Etsy/Listing-Images/<listing_key>/`, writes `<image-stem>_etsy_listing.txt` in the same folder for manual title/description copying, and updates `/Etsy/Approved/<image-stem>.etsy.json` with listing image paths. Greeble #01 has curated fallback copy if its sidecar does not yet exist. Other artwork requires a sidecar with `title`, `description`, and `digital_files`. An existing sidecar takes priority over Greeble's fallback.
+
+This mode does not write to `/Etsy/Upscaled`, use Replicate, or call Etsy. It does not overwrite existing JPEG previews unless `OVERWRITE_OUTPUT=true`. The metadata sidecar and manual TXT are refreshed each run; edit the sidecar rather than the generated TXT to preserve copy changes.
+
+For Greeble, listing-only mode also composites the exact approved PNG into a journal example, greeting-card example, and four-use collage. All three extra JPEGs explicitly state **DIGITAL PNG ONLY / MOCKUP FOR INSPIRATION**. These are generated illustrative scenes, not photographs of physical merchandise. Other designs continue to produce four standard previews unless mockups are explicitly enabled in code.
+
+## Automatic Etsy PNG size limit
+
+The normal pipeline keeps the full-resolution master in `/Etsy/Upscaled/<name>.png` and also creates `/Etsy/Upscaled/<name>_etsy.png`. The latter is exported at **3600 × 3600 for square artwork**, or 3600 pixels on the longest side for other aspect ratios, then lossless-compressed under 19,900,000 bytes. True transparency and 300 PPI metadata are retained. If the upscaled master is too small or the required dimensions cannot fit, the job fails and sends the source to Needs-Review instead of uploading an oversized or aggressively color-reduced file. The generated Etsy listing previews use the optimized PNG. This does not call the Etsy API.
+
+To fix an existing upscaled file **without another paid Replicate call**:
+
+```bash
+python pipeline.py --once --file greeble_cauldron_toad_alchemist.png --optimize-existing
+```
+
+The approved source must still be in `/Etsy/Approved`, and the upscaled master must exist in `/Etsy/Upscaled`. If a matching Etsy sidecar exists in Approved, listing previews and a manual title/description TXT are also generated. `--optimize-existing` overwrites only the separate `_etsy.png` derivative, never the full-resolution master. The source image uploaded in chat is 2048x2048; do not substitute it for the 31 MB upscaled master if you want the larger print resolution.
+
+## Current production workflow (October 2026)
+
+For standard transparent clipart, the **actual Etsy deliverable** is a 3600-pixel-long-edge PNG (3600 × 3600 for square designs), with the original aspect ratio preserved, real transparency, 300 DPI metadata, and a strict 19,900,000-byte export target. The original upscaled master is retained separately. If the master is below the target resolution, the exporter fails with an instruction to upscale first; if the fixed-resolution true-color PNG exceeds the byte budget, it fails for review rather than shrinking the artwork. The product-specific sizes listed in the earlier `production_workflow.py` planning section are optional alternative formats, **not** the default Etsy clipart export size.
+
+**Important:** The byte limit is an export constraint, not a guarantee that every illustration can fit. Check the actual Etsy derivative and verify its dimensions before publishing a listing.
+
+### Process an existing approved artwork without re-running Replicate
+
+```bash
+# On the feature branch until PR #7 is merged:
+git fetch origin
+git switch feature/etsy-safe-export-drafts-20261003
+git pull --ff-only
+
+# Rebuild the Etsy derivative from the existing upscaled master:
+python pipeline.py --once --file greeble_cauldron_toad_alchemist.png --optimize-existing
+```
+
+Expected Dropbox paths:
+
+```text
+/Etsy/Approved/greeble_cauldron_toad_alchemist.png
+/Etsy/Upscaled/greeble_cauldron_toad_alchemist.png       # original upscaled master
+/Etsy/Upscaled/greeble_cauldron_toad_alchemist_etsy.png  # 3600px Etsy derivative
+/Etsy/Listing-Images/                                    # previews, when enabled
+```
+
+Set `GENERATE_LISTING_IMAGES=true` to request generated listing previews and copy where supported. The Etsy derivative is the buyer download; JPEG previews and lifestyle mockups are **listing images**, not additional buyer download formats. Mockups should depict the exact approved artwork, and any conceptual mockup should be labeled as illustrative rather than represented as a photograph or a pixel-accurate reproduction.
+
+### Greeble Cauldron Alchemist listing reference
+
+- **Suggested title:** Greeble Cauldron Alchemist PNG | Cute Goblin Witch Clipart | Autumn Fantasy Art | Halloween Digital Download
+- **Suggested SKU:** `GRB-ALCHEMIST-001`
+- **Digital download:** One transparent PNG, 3600 × 3600 pixels at 300 DPI, **only after checking the actual output**.
+- **Example uses:** T-shirts, tote bags, mugs, stickers, journaling, scrapbooking, Halloween and autumn crafts.
+- **Buyer-facing disclosure:** Digital product only; no physical item shipped. Mockups are examples. Confirm any license or permitted commercial use before publication.
+- **Quantity:** Etsy may request a quantity for a digital listing; this is a listing inventory setting, not a count of generated files.
+
+This listing copy is a human-reviewed example and is **not automatically synced** into an existing Etsy listing. For durable changes to generated listing copy, update the artwork's `.etsy.json` sidecar in `/Etsy/Approved` rather than editing a regenerated TXT file.
+
+### Verify, review and merge
+
+```bash
+python -m pytest -q
+git status
+```
+
+Review the PR at https://github.com/msmonroe/etsy-image-pipeline/pull/7 before merging. After the PR is merged:
+
+```bash
+git switch main
+git pull --ff-only origin main
+```
+
+**Etsy safety:** `ETSY_UPLOAD_ENABLED` stays false unless explicitly enabled. Draft uploads, when configured, do not publish a listing; final publication remains manual.
+
+### Opaque PNG handling and batch repair
+
+The exporter accepts both transparent and fully opaque PNG masters, preserving the original alpha values rather than inventing transparency. A fully opaque export is suitable only for artwork intended to have a background; review the image if a transparent clipart product was expected. The optimizer reports `has_transparency` accurately.
+
+Batch existing masters with `GENERATE_LISTING_IMAGES=false python pipeline.py --once --optimize-existing`. This reads Approved names and finds matching Upscaled masters. An approved-only file without a matching Upscaled master is reported as a failure; it is not automatically upscaled in this mode. In particular, `/Etsy/Approved/greeble_mushroom_forager_3600.png` requires a separate export workflow because the matching Upscaled master is absent.
+
+### PNG compression improvement
+
+Opaque artwork is now encoded as lossless RGB PNG rather than RGBA with an unnecessary fully opaque alpha channel. Transparent artwork remains RGBA. Both retain their pixel colors and 300 DPI metadata. The Etsy export ceiling is now 19,900,000 bytes (below Etsy's 20,000,000-byte limit). Do not claim transparency for an RGB export. Existing master PNGs are unchanged.
+
+### Final two-file recovery
+
+The Etsy exporter now optionally invokes `oxipng` as a **lossless** second pass only when Pillow's export exceeds 19,900,000 bytes. Install it separately if available on your Ubuntu system (for example via your package manager); the pipeline still works without it, but may reject a difficult image. The optimizer verifies that 300 DPI metadata survives the second pass. If the file still exceeds the limit, it fails without resizing or quantizing the artwork.
+
+`--optimize-existing` now also supports approved-only artwork with no matching Upscaled master, **provided the approved PNG is already at least 3600 pixels on its longest side**. It writes only a separate `_etsy.png` derivative and never overwrites the approved file. This enables processing `greeble_mushroom_forager_3600.png` without Replicate, subject to validation.
+
+```bash
+GENERATE_LISTING_IMAGES=false python pipeline.py --once --file salarycat_vs_printer.png --optimize-existing
+GENERATE_LISTING_IMAGES=false python pipeline.py --once --file greeble_mushroom_forager_3600.png --optimize-existing
+```
