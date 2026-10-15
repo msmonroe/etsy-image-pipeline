@@ -1,4 +1,4 @@
-"""Etsy transparent PNG export at a predictable print resolution."""
+"""Etsy PNG export at a predictable print resolution."""
 from __future__ import annotations
 
 import io
@@ -39,8 +39,7 @@ def optimize_etsy_png(
             raise EtsyOptimizationError("Expected PNG source")
         image = opened.convert("RGBA")
     original_size = image.size
-    if image.getchannel("A").getextrema()[0] == 255:
-        raise EtsyOptimizationError("Expected actual transparency in the PNG")
+    has_transparency = image.getchannel("A").getextrema()[0] < 255
     if max(original_size) < long_edge:
         raise EtsyOptimizationError(
             f"Master is only {original_size[0]}x{original_size[1]}; "
@@ -66,7 +65,7 @@ def optimize_etsy_png(
         "source_dimensions": list(original_size),
         "etsy_dimensions": list(target_size),
         "bytes": len(result),
-        "has_transparency": True,
+        "has_transparency": has_transparency,
         "dpi": 300,
         "resized": target_size != original_size,
     }
