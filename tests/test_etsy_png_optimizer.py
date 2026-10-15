@@ -41,7 +41,8 @@ def test_opaque_png_is_supported_without_inventing_transparency():
     result, info = optimize_etsy_png(_png(alpha=False), long_edge=128)
     assert info["has_transparency"] is False
     with Image.open(io.BytesIO(result)) as image:
-        assert image.getchannel("A").getextrema() == (255, 255)
+        assert image.mode == "RGB"
+        assert image.size == (128, 128)
 
 
 def test_rejects_oversize_at_required_resolution(monkeypatch):
