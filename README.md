@@ -303,3 +303,59 @@ python pipeline.py --once --file greeble_cauldron_toad_alchemist.png --optimize-
 ```
 
 The approved source must still be in `/Etsy/Approved`, and the upscaled master must exist in `/Etsy/Upscaled`. If a matching Etsy sidecar exists in Approved, listing previews and a manual title/description TXT are also generated. `--optimize-existing` overwrites only the separate `_etsy.png` derivative, never the full-resolution master. The source image uploaded in chat is 2048x2048; do not substitute it for the 31 MB upscaled master if you want the larger print resolution.
+
+## Current production workflow (October 2026)
+
+For standard transparent clipart, the **actual Etsy deliverable** is a 3600-pixel-long-edge PNG (3600 × 3600 for square designs), with the original aspect ratio preserved, real transparency, 300 DPI metadata, and a strict 19,000,000-byte export target. The original upscaled master is retained separately. If the master is below the target resolution, the exporter fails with an instruction to upscale first; if the fixed-resolution true-color PNG exceeds the byte budget, it fails for review rather than shrinking the artwork. The product-specific sizes listed in the earlier `production_workflow.py` planning section are optional alternative formats, **not** the default Etsy clipart export size.
+
+**Important:** The byte limit is an export constraint, not a guarantee that every illustration can fit. Check the actual Etsy derivative and verify its dimensions before publishing a listing.
+
+### Process an existing approved artwork without re-running Replicate
+
+```bash
+# On the feature branch until PR #7 is merged:
+git fetch origin
+git switch feature/etsy-safe-export-drafts-20261003
+git pull --ff-only
+
+# Rebuild the Etsy derivative from the existing upscaled master:
+python pipeline.py --once --file greeble_cauldron_toad_alchemist.png --optimize-existing
+```
+
+Expected Dropbox paths:
+
+```text
+/Etsy/Approved/greeble_cauldron_toad_alchemist.png
+/Etsy/Upscaled/greeble_cauldron_toad_alchemist.png       # original upscaled master
+/Etsy/Upscaled/greeble_cauldron_toad_alchemist_etsy.png  # 3600px Etsy derivative
+/Etsy/Listing-Images/                                    # previews, when enabled
+```
+
+Set `GENERATE_LISTING_IMAGES=true` to request generated listing previews and copy where supported. The Etsy derivative is the buyer download; JPEG previews and lifestyle mockups are **listing images**, not additional buyer download formats. Mockups should depict the exact approved artwork, and any conceptual mockup should be labeled as illustrative rather than represented as a photograph or a pixel-accurate reproduction.
+
+### Greeble Cauldron Alchemist listing reference
+
+- **Suggested title:** Greeble Cauldron Alchemist PNG | Cute Goblin Witch Clipart | Autumn Fantasy Art | Halloween Digital Download
+- **Suggested SKU:** `GRB-ALCHEMIST-001`
+- **Digital download:** One transparent PNG, 3600 × 3600 pixels at 300 DPI, **only after checking the actual output**.
+- **Example uses:** T-shirts, tote bags, mugs, stickers, journaling, scrapbooking, Halloween and autumn crafts.
+- **Buyer-facing disclosure:** Digital product only; no physical item shipped. Mockups are examples. Confirm any license or permitted commercial use before publication.
+- **Quantity:** Etsy may request a quantity for a digital listing; this is a listing inventory setting, not a count of generated files.
+
+This listing copy is a human-reviewed example and is **not automatically synced** into an existing Etsy listing. For durable changes to generated listing copy, update the artwork's `.etsy.json` sidecar in `/Etsy/Approved` rather than editing a regenerated TXT file.
+
+### Verify, review and merge
+
+```bash
+python -m pytest -q
+git status
+```
+
+Review the PR at https://github.com/msmonroe/etsy-image-pipeline/pull/7 before merging. After the PR is merged:
+
+```bash
+git switch main
+git pull --ff-only origin main
+```
+
+**Etsy safety:** `ETSY_UPLOAD_ENABLED` stays false unless explicitly enabled. Draft uploads, when configured, do not publish a listing; final publication remains manual.
