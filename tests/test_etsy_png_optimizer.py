@@ -50,3 +50,21 @@ def test_rejects_oversize_at_required_resolution(monkeypatch):
     monkeypatch.setattr(opt, "_encode", lambda image: b"x" * 2000)
     with pytest.raises(EtsyOptimizationError, match="Needs-Review"):
         optimize_etsy_png(_png(), target_bytes=1500, long_edge=128)
+
+def test_lossless_second_pass_used_when_first_result_is_too_large(monkeypatch):
+    import etsy_png_optimizer as opt
+    # Return a valid PNG from the second pass and verify it is accepted.
+    compact = _png((128, 128), alpha=False)
+    monkeypatch.setattr(opt, "_encode", lambda image: b"x" * 2000)
+    monkeypatch.setattr(opt, "_try_oxipng", lambda data: compact)
+    result, info = optimize_etsy_png(_png(), target_bytes=1500, long_edge=128)
+    assert result == compact
+    assert info["bytes"] == len(compact)
+
+
+def test_second_pass_failure_still_rejects_oversize(monkeypatch):
+    import etsy_png_optimizer as opt
+    monkeypatch.setattr(opt, "_encode", lambda image: b"x" * 2000)
+    monkeypatch.setattr(opt, "_try_oxipng", lambda data: data)
+    with pytest.raises(EtsyOptimizationError, match="Needs-Review"):
+        optimize_etsy_png(_png(), target_bytes=1500, long_edge=128)
