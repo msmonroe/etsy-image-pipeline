@@ -41,6 +41,9 @@ def _try_oxipng(data: bytes) -> bytes:
             candidate = path.read_bytes()
             if len(candidate) < len(data):
                 with Image.open(io.BytesIO(candidate)) as checked:
+                    dpi = checked.info.get("dpi", (0, 0))
+                    if not all(abs(v - 300) <= 1 for v in dpi):
+                        return data
                     checked.verify()
                 return candidate
     except (OSError, subprocess.SubprocessError, ValueError):
