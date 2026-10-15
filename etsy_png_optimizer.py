@@ -2,6 +2,10 @@
 from __future__ import annotations
 
 import io
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
 from PIL import Image
 
 ETSY_MAX_BYTES = 20_000_000
@@ -21,6 +25,27 @@ def _encode(image: Image.Image) -> bytes:
     image.save(stream, format="PNG", optimize=True, compress_level=9,
                dpi=(300, 300))
     return stream.getvalue()
+
+
+def _try_oxipng(data: bytes) -> bytes:
+    """Optional lossless second pass; never replace with larger or invalid data."""
+    exe = shutil.which("oxipng")
+    if not exe:
+        return data
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "etsy.png"
+            path.write_bytes(data)
+            subprocess.run([exe, "-o", "4", "--strip", "safe", "--", str(path)],
+                           check=True, capture_output=True, timeout=180)
+            candidate = path.read_bytes()
+            if len(candidate) < len(data):
+                with Image.open(io.BytesIO(candidate)) as checked:
+                    checked.verify()
+                return candidate
+    except (OSError, subprocess.SubprocessError, ValueError):
+        pass
+    return data
 
 
 def optimize_etsy_png(
@@ -56,6 +81,8 @@ def optimize_etsy_png(
     if target_size != original_size:
         image = image.resize(target_size, Image.Resampling.LANCZOS)
     result = _encode(image)
+    if len(result) > target_bytes:
+        result = _try_oxipng(result)
     if len(result) > target_bytes:
         raise EtsyOptimizationError(
             f"Requested {target_size[0]}x{target_size[1]} true-color PNG "
