@@ -618,9 +618,13 @@ def run_once(limit: Optional[int] = None, only_file: Optional[str] = None,
             if optimize_existing:
                 src_path = entry.path_display or entry.path_lower
                 master_path = f"{cfg.upscaled_folder.rstrip('/')}/{entry.name}"
-                if not dropbox_file_exists(dbx, master_path):
-                    raise FileNotFoundError(f"Missing upscaled master: {master_path}")
-                master = download_dropbox_file(dbx, master_path)
+                if dropbox_file_exists(dbx, master_path):
+                    master = download_dropbox_file(dbx, master_path)
+                else:
+                    # Approved-only artwork may already be full-resolution.
+                    # The optimizer rejects anything below the required long edge.
+                    LOG.warning("No upscaled master for %s; validating approved PNG as export source", entry.name)
+                    master = download_dropbox_file(dbx, src_path)
                 etsy_png, info = optimize_etsy_png(master)
                 etsy_path = f"{cfg.upscaled_folder.rstrip('/')}/{PurePosixPath(entry.name).stem}_etsy.png"
                 upload_dropbox_file(dbx, etsy_path, etsy_png, overwrite=True)
