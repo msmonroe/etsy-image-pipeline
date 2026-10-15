@@ -369,3 +369,14 @@ Batch existing masters with `GENERATE_LISTING_IMAGES=false python pipeline.py --
 ### PNG compression improvement
 
 Opaque artwork is now encoded as lossless RGB PNG rather than RGBA with an unnecessary fully opaque alpha channel. Transparent artwork remains RGBA. Both retain their pixel colors and 300 DPI metadata. The Etsy export ceiling is now 19,900,000 bytes (below Etsy's 20,000,000-byte limit). Do not claim transparency for an RGB export. Existing master PNGs are unchanged.
+
+### Final two-file recovery
+
+The Etsy exporter now optionally invokes `oxipng` as a **lossless** second pass only when Pillow's export exceeds 19,900,000 bytes. Install it separately if available on your Ubuntu system (for example via your package manager); the pipeline still works without it, but may reject a difficult image. The optimizer verifies that 300 DPI metadata survives the second pass. If the file still exceeds the limit, it fails without resizing or quantizing the artwork.
+
+`--optimize-existing` now also supports approved-only artwork with no matching Upscaled master, **provided the approved PNG is already at least 3600 pixels on its longest side**. It writes only a separate `_etsy.png` derivative and never overwrites the approved file. This enables processing `greeble_mushroom_forager_3600.png` without Replicate, subject to validation.
+
+```bash
+GENERATE_LISTING_IMAGES=false python pipeline.py --once --file salarycat_vs_printer.png --optimize-existing
+GENERATE_LISTING_IMAGES=false python pipeline.py --once --file greeble_mushroom_forager_3600.png --optimize-existing
+```
