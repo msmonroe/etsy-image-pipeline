@@ -5,7 +5,7 @@ import io
 from PIL import Image
 
 ETSY_MAX_BYTES = 20_000_000
-DEFAULT_TARGET_BYTES = 19_000_000
+DEFAULT_TARGET_BYTES = 19_900_000
 DEFAULT_LONG_EDGE = 3600
 
 
@@ -15,6 +15,9 @@ class EtsyOptimizationError(ValueError):
 
 def _encode(image: Image.Image) -> bytes:
     stream = io.BytesIO()
+    # RGB is lossless for fully opaque artwork and avoids a redundant alpha plane.
+    if image.getchannel("A").getextrema() == (255, 255):
+        image = image.convert("RGB")
     image.save(stream, format="PNG", optimize=True, compress_level=9,
                dpi=(300, 300))
     return stream.getvalue()
