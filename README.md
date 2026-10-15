@@ -294,7 +294,7 @@ For Greeble, listing-only mode also composites the exact approved PNG into a jou
 
 ## Automatic Etsy PNG size limit
 
-The normal pipeline keeps the full-resolution master in `/Etsy/Upscaled/<name>.png` and also creates `/Etsy/Upscaled/<name>_etsy.png`. The latter is exported at **3600 × 3600 for square artwork**, or 3600 pixels on the longest side for other aspect ratios, then lossless-compressed under 19,000,000 bytes. True transparency and 300 PPI metadata are retained. If the upscaled master is too small or the required dimensions cannot fit, the job fails and sends the source to Needs-Review instead of uploading an oversized or aggressively color-reduced file. The generated Etsy listing previews use the optimized PNG. This does not call the Etsy API.
+The normal pipeline keeps the full-resolution master in `/Etsy/Upscaled/<name>.png` and also creates `/Etsy/Upscaled/<name>_etsy.png`. The latter is exported at **3600 × 3600 for square artwork**, or 3600 pixels on the longest side for other aspect ratios, then lossless-compressed under 19,900,000 bytes. True transparency and 300 PPI metadata are retained. If the upscaled master is too small or the required dimensions cannot fit, the job fails and sends the source to Needs-Review instead of uploading an oversized or aggressively color-reduced file. The generated Etsy listing previews use the optimized PNG. This does not call the Etsy API.
 
 To fix an existing upscaled file **without another paid Replicate call**:
 
@@ -306,7 +306,7 @@ The approved source must still be in `/Etsy/Approved`, and the upscaled master m
 
 ## Current production workflow (October 2026)
 
-For standard transparent clipart, the **actual Etsy deliverable** is a 3600-pixel-long-edge PNG (3600 × 3600 for square designs), with the original aspect ratio preserved, real transparency, 300 DPI metadata, and a strict 19,000,000-byte export target. The original upscaled master is retained separately. If the master is below the target resolution, the exporter fails with an instruction to upscale first; if the fixed-resolution true-color PNG exceeds the byte budget, it fails for review rather than shrinking the artwork. The product-specific sizes listed in the earlier `production_workflow.py` planning section are optional alternative formats, **not** the default Etsy clipart export size.
+For standard transparent clipart, the **actual Etsy deliverable** is a 3600-pixel-long-edge PNG (3600 × 3600 for square designs), with the original aspect ratio preserved, real transparency, 300 DPI metadata, and a strict 19,900,000-byte export target. The original upscaled master is retained separately. If the master is below the target resolution, the exporter fails with an instruction to upscale first; if the fixed-resolution true-color PNG exceeds the byte budget, it fails for review rather than shrinking the artwork. The product-specific sizes listed in the earlier `production_workflow.py` planning section are optional alternative formats, **not** the default Etsy clipart export size.
 
 **Important:** The byte limit is an export constraint, not a guarantee that every illustration can fit. Check the actual Etsy derivative and verify its dimensions before publishing a listing.
 
@@ -365,3 +365,7 @@ git pull --ff-only origin main
 The exporter accepts both transparent and fully opaque PNG masters, preserving the original alpha values rather than inventing transparency. A fully opaque export is suitable only for artwork intended to have a background; review the image if a transparent clipart product was expected. The optimizer reports `has_transparency` accurately.
 
 Batch existing masters with `GENERATE_LISTING_IMAGES=false python pipeline.py --once --optimize-existing`. This reads Approved names and finds matching Upscaled masters. An approved-only file without a matching Upscaled master is reported as a failure; it is not automatically upscaled in this mode. In particular, `/Etsy/Approved/greeble_mushroom_forager_3600.png` requires a separate export workflow because the matching Upscaled master is absent.
+
+### PNG compression improvement
+
+Opaque artwork is now encoded as lossless RGB PNG rather than RGBA with an unnecessary fully opaque alpha channel. Transparent artwork remains RGBA. Both retain their pixel colors and 300 DPI metadata. The Etsy export ceiling is now 19,900,000 bytes (below Etsy's 20,000,000-byte limit). Do not claim transparency for an RGB export. Existing master PNGs are unchanged.
